@@ -22,7 +22,7 @@
 
 <br />
 
-Autonomous coding agent orchestrator that runs on top of [OpenCode](https://github.com/opencode-ai/opencode) and [Beads](https://github.com/beads-project/beads). Give it a goal, walk away, come back to a finished branch with passing tests.
+Autonomous coding agent orchestrator that runs on top of [OpenCode](https://github.com/opencode-ai/opencode) and [Beads](https://github.com/steveyegge/beads). Give it a goal, walk away, come back to a finished branch with passing tests.
 
 <br />
 
@@ -43,7 +43,7 @@ Autonomous coding agent orchestrator that runs on top of [OpenCode](https://gith
 ```bash
 # 1. Install prerequisites
 #    - OpenCode CLI: https://github.com/opencode-ai/opencode
-#    - Beads CLI:    https://github.com/beads-project/beads
+#    - Beads CLI:    https://github.com/steveyegge/beads
 #    - Python 3.11+
 
 # 2. Install vtinker
@@ -231,7 +231,7 @@ Point your config at the directory:
 |------|---------|---------|
 | **Python 3.11+** | Runtime | [python.org](https://www.python.org/) |
 | **OpenCode CLI** | LLM interface | [github.com/opencode-ai/opencode](https://github.com/opencode-ai/opencode) |
-| **Beads CLI** (`bd`) | Issue/task tracker | [github.com/beads-project/beads](https://github.com/beads-project/beads) |
+| **Beads CLI** (`bd`) | Issue/task tracker | [github.com/beads-project/beads](https://github.com/steveyegge/beads) |
 
 <br />
 

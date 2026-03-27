@@ -22,7 +22,7 @@
 
 <br />
 
-Автономный оркестратор кодирующих агентов, работающий поверх [OpenCode](https://github.com/opencode-ai/opencode) и [Beads](https://github.com/beads-project/beads). Задайте цель, уходите заниматься своими делами, а возвращайтесь к готовой ветке с пройденными тестами.
+Автономный оркестратор кодирующих агентов, работающий поверх [OpenCode](https://github.com/opencode-ai/opencode) и [Beads](https://github.com/steveyegge/beads). Задайте цель, уходите заниматься своими делами, а возвращайтесь к готовой ветке с пройденными тестами.
 
 <br />
 
@@ -43,7 +43,7 @@
 ```bash
 # 1. Установите необходимые компоненты
 #    - OpenCode CLI: https://github.com/opencode-ai/opencode
-#    - Beads CLI:    https://github.com/beads-project/beads
+#    - Beads CLI:    https://github.com/steveyegge/beads
 #    - Python 3.11+
 
 # 2. Установите vtinker
@@ -231,7 +231,7 @@ mkdir -p .vtinker/prompts
 |------------|-----------|-----------|
 | **Python 3.11+** | Среда выполнения | [python.org](https://www.python.org/) |
 | **OpenCode CLI** | Интерфейс к LLM | [github.com/opencode-ai/opencode](https://github.com/opencode-ai/opencode) |
-| **Beads CLI** (`bd`) | Трекер задач | [github.com/beads-project/beads](https://github.com/beads-project/beads) |
+| **Beads CLI** (`bd`) | Трекер задач | [github.com/beads-project/beads](https://github.com/steveyegge/beads) |
 
 <br />
 
