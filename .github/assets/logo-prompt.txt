@@ -1,0 +1,9 @@
+Minimalist logo for "vtinker" — an autonomous AI coding agent orchestrator.
+
+A stylized letter "V" formed from interconnected gears or cogs, suggesting a workshop/tinkering aesthetic. The gears should be clean and geometric, not steampunk. One small robotic arm or tool emerges from the mechanism, holding a wrench or soldering iron. The overall shape is compact and reads clearly at 32x32px.
+
+Color palette: electric blue (#4F8EF7) and cool white on transparent background. Subtle gradient from blue to cyan. No text in the logo itself.
+
+Style: flat vector, modern tech aesthetic, similar to developer tool logos (like Docker, Terraform, or Rust). Clean lines, no gradients heavier than a subtle linear sweep. Works on both dark and light backgrounds but optimized for dark GitHub pages.
+
+Aspect ratio: 1:1 square. Should work as a favicon, npm badge, and 200px hero image.

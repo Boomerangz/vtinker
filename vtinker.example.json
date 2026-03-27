@@ -1,0 +1,21 @@
+{
+  "workdir": ".",
+  "branch_prefix": "vtinker/",
+  "use_worktree": false,
+  "max_retries": 10,
+  "opencode_timeout": 900,
+  "prompts_dir": null,
+  "checks": [
+    {"name": "build", "command": "go build ./..."},
+    {"name": "test", "command": "go test ./..."}
+  ],
+  "opencode": {
+    "model": null,
+    "agent": null
+  },
+  "models": {
+    "plan": null,
+    "execute": null,
+    "review": null
+  }
+}
