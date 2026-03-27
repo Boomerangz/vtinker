@@ -12,11 +12,34 @@ from typing import Callable
 
 
 @dataclass
+class TokenUsage:
+    input: int = 0
+    output: int = 0
+    reasoning: int = 0
+    cache_read: int = 0
+    cost: float = 0.0
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        return TokenUsage(
+            input=self.input + other.input,
+            output=self.output + other.output,
+            reasoning=self.reasoning + other.reasoning,
+            cache_read=self.cache_read + other.cache_read,
+            cost=self.cost + other.cost,
+        )
+
+    @property
+    def total(self) -> int:
+        return self.input + self.output
+
+
+@dataclass
 class RunResult:
     exit_code: int
     text: str  # concatenated text output from the model
     session_id: str | None = None
     raw_events: list[dict] = field(default_factory=list)
+    tokens: TokenUsage = field(default_factory=TokenUsage)
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +158,7 @@ def run(
         events: list[dict] = []
         text_parts: list[str] = []
         session_id: str | None = None
+        usage = TokenUsage()
 
         def _read_stderr():
             # Drain stderr to prevent blocking
@@ -165,6 +189,18 @@ def run(
                 if text:
                     text_parts.append(text)
 
+            if event.get("type") == "step_finish":
+                part = event.get("part", {})
+                tokens = part.get("tokens", {})
+                cache = tokens.get("cache", {})
+                usage += TokenUsage(
+                    input=tokens.get("input", 0),
+                    output=tokens.get("output", 0),
+                    reasoning=tokens.get("reasoning", 0),
+                    cache_read=cache.get("read", 0),
+                    cost=part.get("cost", 0),
+                )
+
             # Call progress callback
             if on_event:
                 try:
@@ -187,6 +223,7 @@ def run(
         text="".join(text_parts),
         session_id=session_id,
         raw_events=events,
+        tokens=usage,
     )
 
 

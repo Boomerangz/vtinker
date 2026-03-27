@@ -12,6 +12,7 @@ from vtinker import beads, checks, opencode
 from vtinker.config import VTINKER_DIR, Config, State, save_state
 from vtinker.doom import DoomDetector
 from vtinker.gitignore import ensure_gitignore
+from vtinker.opencode import TokenUsage
 from vtinker.parse import EpicDef, extract_epic, extract_tasks, extract_verdict
 from vtinker.prompts import load_prompts
 
@@ -29,6 +30,7 @@ class Orchestrator:
         self.branch_base: str | None = None
         self._log_file: Path | None = None
         self._prompts = load_prompts(config.prompts_dir)
+        self._total_tokens = TokenUsage()
 
     # ------------------------------------------------------------------
     # Entry points
@@ -533,6 +535,19 @@ class Orchestrator:
                 _log("FINAL", f"could not parse new tasks from:\n{missing}")
         else:
             _log("FINAL", f"epic {self.epic_id} COMPLETE")
+        self._print_token_summary()
+
+    def _print_token_summary(self) -> None:
+        t = self._total_tokens
+        _log("TOKENS", f"input: {t.input:,} | output: {t.output:,} | "
+             f"cache_read: {t.cache_read:,} | total: {t.total:,}")
+        if t.cost > 0:
+            _log("TOKENS", f"cost: ${t.cost:.4f}")
+        self._audit("token_summary", {
+            "input": t.input, "output": t.output,
+            "reasoning": t.reasoning, "cache_read": t.cache_read,
+            "total": t.total, "cost": t.cost,
+        })
 
     # ------------------------------------------------------------------
     # OpenCode wrapper
@@ -561,13 +576,15 @@ class Orchestrator:
         if timeout is None:
             timeout = self.config.opencode_timeout
         model = self._model_for(phase) if phase else self.config.opencode_model
-        return opencode.run(
+        result = opencode.run(
             prompt, self.workdir,
             model=model,
             files=files,
             timeout=timeout,
             on_event=opencode.default_progress,
         )
+        self._total_tokens += result.tokens
+        return result
 
 
 # ------------------------------------------------------------------
