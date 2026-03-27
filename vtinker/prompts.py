@@ -63,7 +63,7 @@ Rules:
 - Tasks are ordered: later tasks may depend on earlier ones
 - Each task has clear, testable acceptance criteria
 - Do NOT write code. Only plan.
-- Read relevant source files to understand what exists before planning
+- Only read source files if you need to understand existing code. If the project is empty or new, skip file reading.
 - If a task is clearly simple (single file, trivial change), add "atomic: true" to its fields
 
 Output each task inside a fenced block (the ``` markers are required):
