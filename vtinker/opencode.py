@@ -116,7 +116,7 @@ def run(
             cmd += ["Execute the task described in the attached file.", "-f", prompt_file]
         else:
             cmd.append(prompt)
-        cmd += ["--dir", str(workdir), "--format", "json"]
+        cmd += ["--dir", str(workdir), "--format", "json", "--title", "vtinker"]
         if model:
             cmd += ["--model", model]
         if agent:

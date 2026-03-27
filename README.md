@@ -1,3 +1,10 @@
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.ru.md">Русский</a> ·
+  <a href="README.kz.md">Қазақша</a> ·
+  <a href="README.ar.md">العربية</a>
+</p>
+
 <p align="center"><img src=".github/assets/logo.png" width="200" /></p>
 
 <h1 align="center">vtinker</h1>
