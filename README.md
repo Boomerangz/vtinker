@@ -167,12 +167,14 @@ Models tested on real-world coding tasks with vtinker orchestration:
 |:------|-----:|:---------------:|:-------------:|:------------:|:-------:|
 | GLM-5 | 30m | 8/8 | 51 | 0 | **A+** |
 | GLM-4.7 | 25m | 7/7 | 74 | 1 | **A** |
+| Qwen3-max | 26m | 5/5 | 35 | 6 | **B+** |
+| Qwen3-coder-plus | 34m | 8/8 | 30 | 5 | **B+** |
+| Kimi K2.5 | 46m | 7/7 | 39 | 3 | **B** |
 | MiniMax-m2.7 | 41m | 8/8 | 22 | 1 | **B-** |
 | MiniMax-m2.5 | 45m | 5/5 | 19 | 3 | **C** |
-| Kimi K2.5 | DNF | - | - | - | **F** |
-| Qwen3-coder | 9m | 1/1 | 3 | 1 | **D** |
+| Qwen3-coder-flash | 6m | 1/1 | 9 | 0 | **D** |
 
-> GLM-5 completed all tasks on the first try with zero fix attempts. Kimi K2.5 did not finish (doom-looped).
+> GLM-5 completed all tasks on the first try with zero fix attempts. 8 models tested on the same miniqueue task.
 
 <br />
 
