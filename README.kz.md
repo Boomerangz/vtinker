@@ -22,7 +22,7 @@
 
 <br />
 
-[OpenCode](https://github.com/opencode-ai/opencode) және [Beads](https://github.com/steveyegge/beads) үстінде жұмыс істейтін автономды код жазу агенттерінің оркестраторы. Мақсатты белгілеңіз, кетіңіз, тесттері өткен дайын бұтаққа қайтып келіңіз.
+[OpenCode](https://opencode.ai) және [Beads](https://github.com/steveyegge/beads) үстінде жұмыс істейтін автономды код жазу агенттерінің оркестраторы. Мақсатты белгілеңіз, кетіңіз, тесттері өткен дайын бұтаққа қайтып келіңіз.
 
 <br />
 
@@ -42,7 +42,7 @@
 
 ```bash
 # 1. Алдын ала қажетті құралдарды орнатыңыз
-#    - OpenCode CLI: https://github.com/opencode-ai/opencode
+#    - OpenCode CLI: https://opencode.ai
 #    - Beads CLI:    https://github.com/steveyegge/beads
 #    - Python 3.11+
 
@@ -230,8 +230,8 @@ mkdir -p .vtinker/prompts
 | Құрал | Мақсаты | Орнату |
 |-------|---------|--------|
 | **Python 3.11+** | Орындау ортасы | [python.org](https://www.python.org/) |
-| **OpenCode CLI** | LLM интерфейсі | [github.com/opencode-ai/opencode](https://github.com/opencode-ai/opencode) |
-| **Beads CLI** (`bd`) | Тапсырмалар трекері | [github.com/beads-project/beads](https://github.com/steveyegge/beads) |
+| **OpenCode CLI** | LLM интерфейсі | [opencode.ai](https://opencode.ai) |
+| **Beads CLI** (`bd`) | Тапсырмалар трекері | [github.com/steveyegge/beads](https://github.com/steveyegge/beads) |
 
 <br />
 

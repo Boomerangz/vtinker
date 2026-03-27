@@ -22,7 +22,7 @@
 
 <br />
 
-Autonomous coding agent orchestrator that runs on top of [OpenCode](https://github.com/opencode-ai/opencode) and [Beads](https://github.com/steveyegge/beads). Give it a goal, walk away, come back to a finished branch with passing tests.
+Autonomous coding agent orchestrator that runs on top of [OpenCode](https://opencode.ai) and [Beads](https://github.com/steveyegge/beads). Give it a goal, walk away, come back to a finished branch with passing tests.
 
 <br />
 
@@ -42,7 +42,7 @@ Autonomous coding agent orchestrator that runs on top of [OpenCode](https://gith
 
 ```bash
 # 1. Install prerequisites
-#    - OpenCode CLI: https://github.com/opencode-ai/opencode
+#    - OpenCode CLI: https://opencode.ai
 #    - Beads CLI:    https://github.com/steveyegge/beads
 #    - Python 3.11+
 
@@ -232,8 +232,8 @@ Point your config at the directory:
 | Tool | Purpose | Install |
 |------|---------|---------|
 | **Python 3.11+** | Runtime | [python.org](https://www.python.org/) |
-| **OpenCode CLI** | LLM interface | [github.com/opencode-ai/opencode](https://github.com/opencode-ai/opencode) |
-| **Beads CLI** (`bd`) | Issue/task tracker | [github.com/beads-project/beads](https://github.com/steveyegge/beads) |
+| **OpenCode CLI** | LLM interface | [opencode.ai](https://opencode.ai) |
+| **Beads CLI** (`bd`) | Issue/task tracker | [github.com/steveyegge/beads](https://github.com/steveyegge/beads) |
 
 <br />
 

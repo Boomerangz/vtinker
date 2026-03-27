@@ -22,7 +22,7 @@
 
 <br />
 
-منسّق وكلاء البرمجة المستقل الذي يعمل فوق [OpenCode](https://github.com/opencode-ai/opencode) و [Beads](https://github.com/steveyegge/beads). حدد الهدف، اذهب لشؤونك، وعُد لتجد فرعاً جاهزاً بالاختبارات الناجحة.
+منسّق وكلاء البرمجة المستقل الذي يعمل فوق [OpenCode](https://opencode.ai) و [Beads](https://github.com/steveyegge/beads). حدد الهدف، اذهب لشؤونك، وعُد لتجد فرعاً جاهزاً بالاختبارات الناجحة.
 
 <br />
 
@@ -42,7 +42,7 @@
 
 ```bash
 # 1. ثبّت المتطلبات الأساسية
-#    - OpenCode CLI: https://github.com/opencode-ai/opencode
+#    - OpenCode CLI: https://opencode.ai
 #    - Beads CLI:    https://github.com/steveyegge/beads
 #    - Python 3.11+
 
@@ -230,8 +230,8 @@ mkdir -p .vtinker/prompts
 | الأداة | الغرض | التثبيت |
 |--------|-------|---------|
 | **Python 3.11+** | بيئة التشغيل | [python.org](https://www.python.org/) |
-| **OpenCode CLI** | واجهة النماذج اللغوية | [github.com/opencode-ai/opencode](https://github.com/opencode-ai/opencode) |
-| **Beads CLI** (`bd`) | متتبع المهام | [github.com/beads-project/beads](https://github.com/steveyegge/beads) |
+| **OpenCode CLI** | واجهة النماذج اللغوية | [opencode.ai](https://opencode.ai) |
+| **Beads CLI** (`bd`) | متتبع المهام | [github.com/steveyegge/beads](https://github.com/steveyegge/beads) |
 
 <br />
 
