@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+{% set active_page = "dashboard" %}
+
+{% block title %}vtinker — {{ run.project | default('Run') }}{% endblock %}
+
+{% block content %}
+<div x-data="{
+  run: {{ run | tojson }},
+  tasks: {{ tasks | default([]) | tojson }},
+  selectedTaskId: null,
+  logLines: [],
+  ws: null,
+  autoScroll: true,
+
+  get selectedTask() {
+    return this.tasks.find(t => t.id === this.selectedTaskId) || this.tasks[0] || null;
+  },
+
+  get completedCount() {
+    return this.tasks.filter(t => t.status === 'done').length;
+  },
+
+  get totalTasks() {
+    return this.tasks.length;
+  },
+
+  get overallProgress() {
+    if (!this.totalTasks) return 0;
+    return Math.round((this.completedCount / this.totalTasks) * 100);
+  },
+
+  selectTask(taskId) {
+    this.selectedTaskId = taskId;
+    this.logLines = [];
+    // In production, fetch task-specific logs
+  },
+
+  connectWs() {
+    const runId = this.run.id;
+    this.ws = new WebSocket('ws://localhost:8420/ws/run/' + runId);
+    this.ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'log') {
+        this.logLines.push(data);
+        if (this.autoScroll) {
+          this.$nextTick(() => {
+            const el = document.getElementById('log-output');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        }
+      }
+      if (data.type === 'task_update') {
+        const idx = this.tasks.findIndex(t => t.id === data.task.id);
+        if (idx >= 0) this.tasks[idx] = data.task;
+      }
+      if (data.type === 'run_update') {
+        Object.assign(this.run, data.run);
+      }
+    };
+    this.ws.onclose = () => { setTimeout(() => this.connectWs(), 3000); };
+  },
+
+  init() {
+    if (this.tasks.length > 0) this.selectedTaskId = this.tasks[0].id;
+    this.connectWs();
+  },
+
+  statusColor(status) {
+    return {
+      done: 'text-emerald-400',
+      running: 'text-amber-400',
+      waiting: 'text-slate-500',
+      blocked: 'text-red-400',
+    }[status] || 'text-slate-500';
+  },
+
+  statusBg(status) {
+    return {
+      done: 'bg-emerald-500/10 border-emerald-500/20',
+      running: 'bg-amber-500/10 border-amber-500/20',
+      waiting: 'bg-slate-500/5 border-slate-700',
+      blocked: 'bg-red-500/10 border-red-500/20',
+    }[status] || 'bg-slate-500/5 border-slate-700';
+  }
+}" x-cloak class="animate-fade-in">
+
+  <!-- Breadcrumb -->
+  <div class="flex items-center gap-2 text-xs text-slate-500 mb-5">
+    <a href="/" class="hover:text-slate-300 transition-colors">Runs</a>
+    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+    <span class="text-slate-300" x-text="run.project || 'Run'"></span>
+  </div>
+
+  <!-- Top Summary Bar -->
+  <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-5 mb-5">
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <!-- Left: Title & badges -->
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-3 mb-2">
+          <h1 class="text-lg font-semibold truncate" x-text="run.epic_title || run.project || 'Untitled Run'"></h1>
+          <!-- Run status -->
+          <template x-if="run.status === 'running'">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 flex-shrink-0">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-slow"></span>
+              Running
+            </span>
+          </template>
+          <template x-if="run.status === 'done'">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex-shrink-0">
+              <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+              Complete
+            </span>
+          </template>
+          <template x-if="run.status === 'blocked'">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 flex-shrink-0">
+              Blocked
+            </span>
+          </template>
+        </div>
+
+        <!-- Model badges -->
+        <div class="flex flex-wrap items-center gap-2">
+          <template x-if="run.models?.plan">
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-blue-500/10 text-blue-400 border border-blue-500/15">
+              <span class="uppercase tracking-wider opacity-50">Plan</span> <span x-text="run.models.plan"></span>
+            </span>
+          </template>
+          <template x-if="run.models?.execute">
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/15">
+              <span class="uppercase tracking-wider opacity-50">Exec</span> <span x-text="run.models.execute"></span>
+            </span>
+          </template>
+          <template x-if="run.models?.review">
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-violet-500/10 text-violet-400 border border-violet-500/15">
+              <span class="uppercase tracking-wider opacity-50">Review</span> <span x-text="run.models.review"></span>
+            </span>
+          </template>
+        </div>
+      </div>
+
+      <!-- Right: Stats -->
+      <div class="flex items-center gap-6 flex-shrink-0">
+        <div class="text-center">
+          <div class="text-xs text-slate-500 mb-0.5">Progress</div>
+          <div class="text-sm font-semibold font-mono" x-text="overallProgress + '%'"></div>
+        </div>
+        <div class="w-px h-8 bg-slate-800"></div>
+        <div class="text-center">
+          <div class="text-xs text-slate-500 mb-0.5">Elapsed</div>
+          <div class="text-sm font-semibold font-mono" x-text="run.elapsed || '0:00'"></div>
+        </div>
+        <div class="w-px h-8 bg-slate-800"></div>
+        <div class="text-center">
+          <div class="text-xs text-slate-500 mb-0.5">Tokens</div>
+          <div class="text-sm font-semibold font-mono" x-text="run.total_tokens ? (run.total_tokens / 1000).toFixed(1) + 'k' : '0'"></div>
+        </div>
+        <div class="w-px h-8 bg-slate-800"></div>
+        <div class="text-center">
+          <div class="text-xs text-slate-500 mb-0.5">Cost</div>
+          <div class="text-sm font-semibold font-mono text-emerald-400" x-text="'$' + (run.cost || 0).toFixed(2)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Overall Progress Bar -->
+    <div class="mt-4">
+      <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+        <div class="h-full rounded-full transition-all duration-1000 ease-out"
+             :class="run.status === 'running'
+               ? 'bg-gradient-to-r from-amber-500 to-amber-400 progress-stripe animate-progress-stripe'
+               : run.status === 'done'
+                 ? 'bg-gradient-to-r from-emerald-500 to-emerald-400'
+                 : 'bg-gradient-to-r from-red-500 to-red-400'"
+             :style="'width: ' + overallProgress + '%'">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Two-Column Layout -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+    <!-- Left: Task List (1/3) -->
+    <div class="lg:col-span-4 xl:col-span-3">
+      <div class="bg-slate-900/80 border border-slate-800 rounded-xl overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/80">
+          <div class="flex items-center justify-between">
+            <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Tasks</h2>
+            <span class="text-xs text-slate-500 font-mono" x-text="completedCount + '/' + totalTasks"></span>
+          </div>
+        </div>
+
+        <div class="max-h-[calc(100vh-360px)] overflow-y-auto">
+          <template x-for="(task, index) in tasks" :key="task.id">
+            <button @click="selectTask(task.id)"
+                    :class="selectedTaskId === task.id
+                      ? 'bg-slate-800/80 border-l-2 border-l-emerald-500'
+                      : 'border-l-2 border-l-transparent hover:bg-slate-800/40'"
+                    class="w-full text-left px-4 py-3 border-b border-slate-800/40 transition-all duration-200 animate-fade-in-up"
+                    :style="'animation-delay: ' + (index * 40) + 'ms; animation-fill-mode: backwards;'">
+              <div class="flex items-start gap-3">
+                <!-- Status icon -->
+                <div class="mt-0.5 flex-shrink-0">
+                  <template x-if="task.status === 'done'">
+                    <div class="w-5 h-5 rounded-full bg-emerald-500/15 flex items-center justify-center">
+                      <svg class="w-3 h-3 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                      </svg>
+                    </div>
+                  </template>
+                  <template x-if="task.status === 'running'">
+                    <div class="w-5 h-5 rounded-full bg-amber-500/15 flex items-center justify-center">
+                      <div class="w-2 h-2 rounded-full bg-amber-400 animate-pulse-slow"></div>
+                    </div>
+                  </template>
+                  <template x-if="task.status === 'waiting'">
+                    <div class="w-5 h-5 rounded-full bg-slate-700/50 flex items-center justify-center">
+                      <div class="w-2 h-2 rounded-full bg-slate-500"></div>
+                    </div>
+                  </template>
+                  <template x-if="task.status === 'blocked'">
+                    <div class="w-5 h-5 rounded-full bg-red-500/15 flex items-center justify-center">
+                      <svg class="w-3 h-3 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                      </svg>
+                    </div>
+                  </template>
+                </div>
+
+                <!-- Task info -->
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium truncate" :class="task.status === 'waiting' ? 'text-slate-400' : 'text-slate-200'" x-text="task.title"></p>
+                  <div class="flex items-center gap-2 mt-1">
+                    <span class="text-[10px] font-mono" :class="statusColor(task.status)" x-text="task.status"></span>
+                    <template x-if="task.duration">
+                      <span class="text-[10px] text-slate-600 font-mono" x-text="task.duration"></span>
+                    </template>
+                    <template x-if="task.fix_count > 0">
+                      <span class="text-[10px] text-slate-600 font-mono" x-text="task.fix_count + ' fix' + (task.fix_count > 1 ? 'es' : '')"></span>
+                    </template>
+                  </div>
+                </div>
+
+                <!-- Task number -->
+                <span class="text-[10px] text-slate-600 font-mono flex-shrink-0" x-text="'#' + (index + 1)"></span>
+              </div>
+            </button>
+          </template>
+
+          <!-- No tasks -->
+          <template x-if="tasks.length === 0">
+            <div class="px-4 py-8 text-center">
+              <p class="text-xs text-slate-500">Waiting for tasks...</p>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Live Output (2/3) -->
+    <div class="lg:col-span-8 xl:col-span-9">
+      <div class="bg-slate-900/80 border border-slate-800 rounded-xl overflow-hidden flex flex-col" style="height: calc(100vh - 360px); min-height: 400px;">
+
+        <!-- Output header -->
+        <div class="px-4 py-3 border-b border-slate-800/80 flex items-center justify-between flex-shrink-0">
+          <div class="flex items-center gap-3">
+            <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Live Output</h2>
+            <template x-if="selectedTask">
+              <span class="text-xs text-slate-500 font-mono" x-text="selectedTask.title"></span>
+            </template>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="autoScroll = !autoScroll"
+                    :class="autoScroll ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-500 bg-transparent'"
+                    class="px-2 py-1 text-[10px] font-medium rounded-md border border-slate-700/50 transition-colors duration-200">
+              Auto-scroll
+            </button>
+            <button @click="logLines = []"
+                    class="px-2 py-1 text-[10px] font-medium text-slate-500 rounded-md border border-slate-700/50 hover:text-slate-300 transition-colors duration-200">
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <!-- Terminal output -->
+        <div id="log-output"
+             class="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed relative terminal-scanline"
+             style="background: linear-gradient(180deg, #0c1018 0%, #0f172a 100%);">
+
+          <!-- Log lines -->
+          <template x-for="(line, i) in logLines" :key="i">
+            <div class="py-0.5 animate-fade-in flex gap-3 hover:bg-slate-800/30 px-1 -mx-1 rounded"
+                 :class="{
+                   'text-slate-300': line.level === 'info',
+                   'text-amber-400': line.level === 'warning',
+                   'text-red-400': line.level === 'error',
+                   'text-slate-500': line.level === 'debug',
+                   'text-emerald-400': line.level === 'success',
+                 }">
+              <span class="text-slate-600 select-none flex-shrink-0 w-16 text-right" x-text="line.timestamp || ''"></span>
+              <span class="flex-shrink-0 w-5 text-center opacity-60"
+                    x-text="line.level === 'error' ? '!' : line.level === 'warning' ? '~' : line.level === 'success' ? '+' : '|'"></span>
+              <span class="break-all" x-text="line.message"></span>
+            </div>
+          </template>
+
+          <!-- Empty state -->
+          <template x-if="logLines.length === 0">
+            <div class="flex flex-col items-center justify-center h-full text-slate-600">
+              <svg class="w-8 h-8 mb-3 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+              </svg>
+              <span class="text-xs">Waiting for output...</span>
+              <span class="text-[10px] text-slate-700 mt-1">Connected via WebSocket</span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom: Timeline Visualization -->
+  <div class="mt-5 bg-slate-900/80 border border-slate-800 rounded-xl p-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-4">Timeline</h2>
+
+    <div class="relative">
+      <!-- Track -->
+      <div class="h-2 bg-slate-800 rounded-full relative overflow-hidden">
+        <!-- Completed portion -->
+        <div class="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-600/60 to-emerald-500/60 rounded-full transition-all duration-1000"
+             :style="'width: ' + overallProgress + '%'">
+        </div>
+      </div>
+
+      <!-- Task markers -->
+      <div class="relative mt-1 flex">
+        <template x-for="(task, index) in tasks" :key="task.id + '-marker'">
+          <div class="absolute -top-[14px] transform -translate-x-1/2 group cursor-pointer"
+               :style="'left: ' + ((index + 0.5) / totalTasks * 100) + '%'"
+               @click="selectTask(task.id)">
+            <!-- Marker dot -->
+            <div class="w-3 h-3 rounded-full border-2 border-slate-900 transition-all duration-300"
+                 :class="{
+                   'bg-emerald-400 shadow-emerald-400/30 shadow-sm': task.status === 'done',
+                   'bg-amber-400 shadow-amber-400/30 shadow-sm animate-pulse-slow': task.status === 'running',
+                   'bg-slate-600': task.status === 'waiting',
+                   'bg-red-400 shadow-red-400/30 shadow-sm': task.status === 'blocked',
+                 }">
+            </div>
+            <!-- Tooltip -->
+            <div class="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 hidden group-hover:block z-20">
+              <div class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs whitespace-nowrap shadow-xl">
+                <p class="font-medium text-slate-200" x-text="task.title"></p>
+                <p class="text-slate-500 mt-0.5" x-text="task.status + (task.duration ? ' \u00b7 ' + task.duration : '')"></p>
+              </div>
+              <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
+                <div class="w-2 h-2 bg-slate-800 border-b border-r border-slate-700 transform rotate-45"></div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Task labels (below timeline) -->
+      <div class="flex mt-4 relative" style="height: 20px;">
+        <template x-for="(task, index) in tasks" :key="task.id + '-label'">
+          <div class="absolute text-[10px] font-mono transform -translate-x-1/2 truncate max-w-[80px] text-center"
+               :class="statusColor(task.status)"
+               :style="'left: ' + ((index + 0.5) / totalTasks * 100) + '%'"
+               x-text="'#' + (index + 1)">
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

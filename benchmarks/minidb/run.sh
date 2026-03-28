@@ -14,6 +14,15 @@ EXECUTE_MODEL="${3:-$PLAN_MODEL}"
 REVIEW_MODEL="${4:-$PLAN_MODEL}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VTINKER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Preflight checks
+for cmd in opencode bd python3 git; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "ERROR: '$cmd' not found in PATH. Install it first." >&2
+    exit 1
+  fi
+done
 
 echo "=== minidb benchmark ==="
 echo "Workdir:  $WORKDIR"
@@ -39,5 +48,18 @@ sed \
   -e "s|<REVIEW_MODEL>|$REVIEW_MODEL|g" \
   "$SCRIPT_DIR/config.json" > "$WORKDIR/.vtinker/config.json"
 
-echo "Starting vtinker..."
-vtinker start --from "$WORKDIR/epic.md" --dir "$WORKDIR" 2>&1 | tee "$WORKDIR/output.log"
+echo "Config written to $WORKDIR/.vtinker/config.json"
+echo "Epic written to $WORKDIR/epic.md"
+echo ""
+echo "Starting vtinker... (output streams below)"
+echo "Log file: $WORKDIR/output.log"
+echo "---"
+
+# Run vtinker with unbuffered output, tee to log file
+export PYTHONUNBUFFERED=1
+exec python3 -c "
+import sys; sys.path.insert(0, '$VTINKER_ROOT')
+from vtinker.cli import main
+sys.argv = ['vtinker', 'start', '--from', '$WORKDIR/epic.md', '--dir', '$WORKDIR']
+main()
+" 2>&1 | tee "$WORKDIR/output.log"

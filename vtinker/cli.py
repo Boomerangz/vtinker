@@ -39,11 +39,21 @@ def main() -> None:
     p_status = sub.add_parser("status", help="Show epic status from beads")
     p_status.add_argument("epic_id", nargs="?", help="Beads epic ID (auto-detected if omitted)")
 
+    # vtinker web
+    p_web = sub.add_parser("web", help="Start web monitoring dashboard")
+    p_web.add_argument("--port", type=int, default=8420, help="Port (default: 8420)")
+    p_web.add_argument("--host", default="127.0.0.1", help="Host (default: 127.0.0.1)")
+    p_web.add_argument("dirs", nargs="*", type=Path, help="Directories to scan for runs (default: cwd)")
+
     args = parser.parse_args()
 
     if args.command is None:
         parser.print_help()
         sys.exit(1)
+
+    if args.command == "web":
+        _handle_web(args)
+        return
 
     if args.command == "status":
         _handle_status(args)
@@ -117,6 +127,22 @@ def _resolve_headless_epic(args) -> "EpicDef | None":
         return EpicDef(title=title, description=desc)
 
     return None
+
+
+def _handle_web(args) -> None:
+    try:
+        import uvicorn
+    except ImportError:
+        print("Error: uvicorn not installed. Run: pip install uvicorn fastapi jinja2", file=sys.stderr)
+        sys.exit(1)
+
+    from vtinker.web.app import app, set_search_dirs
+
+    dirs = [Path(d).resolve() for d in args.dirs] if args.dirs else [Path(".").resolve()]
+    set_search_dirs(dirs)
+
+    print(f"vtinker web dashboard: http://{args.host}:{args.port}", file=sys.stderr)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 def _handle_status(args) -> None:

@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% set active_page = "new_run" %}
+
+{% block title %}vtinker — New Run{% endblock %}
+
+{% block content %}
+<div x-data="{
+  form: {
+    working_dir: '',
+    epic_text: '',
+    epic_file: null,
+    epic_mode: 'text',
+    model_plan: 'glm-5',
+    model_execute: 'glm-4.7',
+    model_review: 'glm-5',
+    max_retries: 3,
+    timeout: 1800,
+  },
+  showAdvanced: false,
+  submitting: false,
+  errors: {},
+
+  models: [
+    { value: 'glm-5', label: 'GLM-5', tag: 'best' },
+    { value: 'glm-4.7', label: 'GLM-4.7', tag: '' },
+    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', tag: '' },
+    { value: 'claude-opus-4-20250514', label: 'Claude Opus 4', tag: '' },
+    { value: 'gpt-4o', label: 'GPT-4o', tag: '' },
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', tag: '' },
+    { value: 'deepseek-r1', label: 'DeepSeek R1', tag: '' },
+  ],
+
+  validate() {
+    this.errors = {};
+    if (!this.form.working_dir.trim()) {
+      this.errors.working_dir = 'Working directory is required';
+    }
+    if (this.form.epic_mode === 'text' && !this.form.epic_text.trim()) {
+      this.errors.epic_text = 'Epic description is required';
+    }
+    if (this.form.epic_mode === 'file' && !this.form.epic_file) {
+      this.errors.epic_file = 'Please select an epic file';
+    }
+    return Object.keys(this.errors).length === 0;
+  },
+
+  async submit() {
+    if (!this.validate()) return;
+    this.submitting = true;
+
+    const formData = new FormData();
+    formData.append('working_dir', this.form.working_dir);
+    formData.append('model_plan', this.form.model_plan);
+    formData.append('model_execute', this.form.model_execute);
+    formData.append('model_review', this.form.model_review);
+    formData.append('max_retries', this.form.max_retries);
+    formData.append('timeout', this.form.timeout);
+
+    if (this.form.epic_mode === 'text') {
+      formData.append('epic_text', this.form.epic_text);
+    } else {
+      formData.append('epic_file', this.form.epic_file);
+    }
+
+    try {
+      const resp = await fetch('/runs', { method: 'POST', body: formData });
+      const data = await resp.json();
+      if (resp.ok) {
+        window.location.href = '/runs/' + data.id;
+      } else {
+        this.errors.submit = data.error || 'Failed to start run';
+      }
+    } catch (e) {
+      this.errors.submit = 'Connection failed. Is vtinker running?';
+    } finally {
+      this.submitting = false;
+    }
+  },
+
+  handleFileDrop(e) {
+    const file = e.dataTransfer?.files[0] || e.target.files[0];
+    if (file) {
+      this.form.epic_file = file;
+      this.form.epic_mode = 'file';
+    }
+  }
+}" x-cloak class="animate-fade-in">
+
+  <!-- Header -->
+  <div class="max-w-2xl mx-auto mb-8 text-center">
+    <h1 class="text-2xl font-semibold tracking-tight mb-2">New Run</h1>
+    <p class="text-sm text-slate-400">Configure and launch an autonomous coding agent session</p>
+  </div>
+
+  <!-- Form -->
+  <div class="max-w-2xl mx-auto">
+    <form @submit.prevent="submit" class="space-y-6">
+
+      <!-- Submit error -->
+      <template x-if="errors.submit">
+        <div class="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-sm text-red-400 flex items-center gap-2 animate-fade-in">
+          <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+          <span x-text="errors.submit"></span>
+        </div>
+      </template>
+
+      <!-- Working Directory -->
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-2">Working Directory</label>
+        <div class="relative">
+          <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+            <svg class="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+            </svg>
+          </div>
+          <input type="text" x-model="form.working_dir"
+                 placeholder="/home/user/my-project"
+                 :class="errors.working_dir ? 'border-red-500/50 focus:border-red-500' : 'border-slate-700 focus:border-emerald-500/50'"
+                 class="w-full bg-slate-900 border rounded-xl pl-10 pr-4 py-3 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 transition-all duration-200">
+        </div>
+        <template x-if="errors.working_dir">
+          <p class="mt-1.5 text-xs text-red-400 animate-fade-in" x-text="errors.working_dir"></p>
+        </template>
+      </div>
+
+      <!-- Epic -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <label class="block text-sm font-medium text-slate-300">Epic</label>
+          <div class="flex items-center bg-slate-800 rounded-lg p-0.5">
+            <button type="button" @click="form.epic_mode = 'text'"
+                    :class="form.epic_mode === 'text' ? 'bg-slate-700 text-slate-200 shadow-sm' : 'text-slate-500 hover:text-slate-400'"
+                    class="px-3 py-1 text-xs font-medium rounded-md transition-all duration-200">
+              Write
+            </button>
+            <button type="button" @click="form.epic_mode = 'file'"
+                    :class="form.epic_mode === 'file' ? 'bg-slate-700 text-slate-200 shadow-sm' : 'text-slate-500 hover:text-slate-400'"
+                    class="px-3 py-1 text-xs font-medium rounded-md transition-all duration-200">
+              Upload
+            </button>
+          </div>
+        </div>
+
+        <!-- Text mode -->
+        <template x-if="form.epic_mode === 'text'">
+          <div class="animate-fade-in">
+            <textarea x-model="form.epic_text"
+                      rows="8"
+                      placeholder="Describe the epic... what should the AI agents build or fix?
+
+Example:
+Refactor the authentication module to use JWT tokens.
+- Replace session-based auth with JWT
+- Add refresh token rotation
+- Write tests for all new endpoints"
+                      :class="errors.epic_text ? 'border-red-500/50 focus:border-red-500' : 'border-slate-700 focus:border-emerald-500/50'"
+                      class="w-full bg-slate-900 border rounded-xl px-4 py-3 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 transition-all duration-200 resize-none font-mono leading-relaxed">
+            </textarea>
+            <template x-if="errors.epic_text">
+              <p class="mt-1.5 text-xs text-red-400 animate-fade-in" x-text="errors.epic_text"></p>
+            </template>
+          </div>
+        </template>
+
+        <!-- File mode -->
+        <template x-if="form.epic_mode === 'file'">
+          <div class="animate-fade-in">
+            <label @drop.prevent="handleFileDrop" @dragover.prevent
+                   :class="errors.epic_file ? 'border-red-500/50' : form.epic_file ? 'border-emerald-500/30' : 'border-slate-700 hover:border-slate-600'"
+                   class="flex flex-col items-center justify-center w-full h-40 bg-slate-900 border-2 border-dashed rounded-xl cursor-pointer transition-all duration-200">
+              <template x-if="!form.epic_file">
+                <div class="flex flex-col items-center">
+                  <svg class="w-8 h-8 text-slate-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                  </svg>
+                  <p class="text-xs text-slate-400">Drop a file here or <span class="text-emerald-400">browse</span></p>
+                  <p class="text-[10px] text-slate-600 mt-1">Markdown or text file</p>
+                </div>
+              </template>
+              <template x-if="form.epic_file">
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                    <svg class="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <p class="text-sm text-slate-200" x-text="form.epic_file.name"></p>
+                    <p class="text-[10px] text-slate-500" x-text="(form.epic_file.size / 1024).toFixed(1) + ' KB'"></p>
+                  </div>
+                </div>
+              </template>
+              <input type="file" class="hidden" accept=".md,.txt,.json" @change="handleFileDrop($event)">
+            </label>
+            <template x-if="errors.epic_file">
+              <p class="mt-1.5 text-xs text-red-400 animate-fade-in" x-text="errors.epic_file"></p>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- Model Selection -->
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-3">Models</label>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <!-- Plan Model -->
+          <div>
+            <label class="block text-[10px] font-semibold uppercase tracking-wider text-blue-400 mb-1.5 flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+              Plan
+            </label>
+            <select x-model="form.model_plan"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-all duration-200 appearance-none cursor-pointer"
+                    style="background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 fill=%22none%22 viewBox=%220 0 20 20%22><path stroke=%22%236b7280%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22 stroke-width=%221.5%22 d=%22M6 8l4 4 4-4%22/></svg>'); background-position: right 10px center; background-repeat: no-repeat; background-size: 16px;">
+              <template x-for="m in models" :key="'plan-' + m.value">
+                <option :value="m.value" x-text="m.label + (m.tag ? ' (' + m.tag + ')' : '')"></option>
+              </template>
+            </select>
+          </div>
+
+          <!-- Execute Model -->
+          <div>
+            <label class="block text-[10px] font-semibold uppercase tracking-wider text-emerald-400 mb-1.5 flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              Execute
+            </label>
+            <select x-model="form.model_execute"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 transition-all duration-200 appearance-none cursor-pointer"
+                    style="background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 fill=%22none%22 viewBox=%220 0 20 20%22><path stroke=%22%236b7280%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22 stroke-width=%221.5%22 d=%22M6 8l4 4 4-4%22/></svg>'); background-position: right 10px center; background-repeat: no-repeat; background-size: 16px;">
+              <template x-for="m in models" :key="'exec-' + m.value">
+                <option :value="m.value" x-text="m.label + (m.tag ? ' (' + m.tag + ')' : '')"></option>
+              </template>
+            </select>
+          </div>
+
+          <!-- Review Model -->
+          <div>
+            <label class="block text-[10px] font-semibold uppercase tracking-wider text-violet-400 mb-1.5 flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-violet-400"></span>
+              Review
+            </label>
+            <select x-model="form.model_review"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/30 transition-all duration-200 appearance-none cursor-pointer"
+                    style="background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 fill=%22none%22 viewBox=%220 0 20 20%22><path stroke=%22%236b7280%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22 stroke-width=%221.5%22 d=%22M6 8l4 4 4-4%22/></svg>'); background-position: right 10px center; background-repeat: no-repeat; background-size: 16px;">
+              <template x-for="m in models" :key="'review-' + m.value">
+                <option :value="m.value" x-text="m.label + (m.tag ? ' (' + m.tag + ')' : '')"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Advanced Settings (Collapsible) -->
+      <div class="border border-slate-800 rounded-xl overflow-hidden">
+        <button type="button" @click="showAdvanced = !showAdvanced"
+                class="w-full flex items-center justify-between px-4 py-3 text-sm text-slate-400 hover:text-slate-300 transition-colors duration-200">
+          <span class="font-medium">Advanced Settings</span>
+          <svg class="w-4 h-4 transition-transform duration-200" :class="showAdvanced ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+
+        <div x-show="showAdvanced" x-collapse
+             class="px-4 pb-4 border-t border-slate-800/60">
+          <div class="grid grid-cols-2 gap-4 pt-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5">Max Retries</label>
+              <input type="number" x-model.number="form.max_retries" min="0" max="10"
+                     class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 transition-all duration-200">
+              <p class="text-[10px] text-slate-600 mt-1">Review-fix cycles per task</p>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5">Timeout (seconds)</label>
+              <input type="number" x-model.number="form.timeout" min="60" max="7200"
+                     class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 transition-all duration-200">
+              <p class="text-[10px] text-slate-600 mt-1">Max time for entire run</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Submit -->
+      <button type="submit"
+              :disabled="submitting"
+              :class="submitting ? 'opacity-60 cursor-not-allowed' : 'hover:from-emerald-500 hover:to-emerald-400 hover:-translate-y-0.5 hover:shadow-emerald-500/30'"
+              class="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-emerald-500/20 transition-all duration-300 flex items-center justify-center gap-2">
+        <template x-if="!submitting">
+          <span class="flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Start Run
+          </span>
+        </template>
+        <template x-if="submitting">
+          <span class="flex items-center gap-2">
+            <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            Starting...
+          </span>
+        </template>
+      </button>
+
+    </form>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% set active_page = "dashboard" %}
+
+{% block title %}vtinker — {{ task.title | default('Task') }}{% endblock %}
+
+{% block content %}
+<div x-data="{
+  task: {{ task | tojson }},
+  run: {{ run | tojson }},
+  reviews: {{ reviews | default([]) | tojson }},
+  activeTab: 'log',
+  logLines: {{ log_lines | default([]) | tojson }},
+  diffLines: {{ diff_lines | default([]) | tojson }},
+
+  statusLabel(status) {
+    return {
+      done: 'Complete',
+      running: 'Running',
+      waiting: 'Waiting',
+      blocked: 'Blocked',
+    }[status] || status;
+  },
+
+  statusClasses(status) {
+    return {
+      done: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+      running: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+      waiting: 'bg-slate-500/10 text-slate-400 border-slate-500/20',
+      blocked: 'bg-red-500/10 text-red-400 border-red-500/20',
+    }[status] || 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  },
+
+  verdictClasses(verdict) {
+    return {
+      approved: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+      rejected: 'bg-red-500/10 text-red-400 border-red-500/20',
+      partial: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    }[verdict] || 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  },
+
+  verdictIcon(verdict) {
+    return {
+      approved: 'M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z',
+      rejected: 'M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z',
+      partial: 'M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z',
+    }[verdict] || '';
+  }
+}" x-cloak class="animate-fade-in">
+
+  <!-- Breadcrumb -->
+  <div class="flex items-center gap-2 text-xs text-slate-500 mb-5">
+    <a href="/" class="hover:text-slate-300 transition-colors">Runs</a>
+    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+    <a :href="'/runs/' + run.id" class="hover:text-slate-300 transition-colors" x-text="run.project || 'Run'"></a>
+    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+    <span class="text-slate-300" x-text="task.title || 'Task'"></span>
+  </div>
+
+  <!-- Task Header -->
+  <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-5 mb-5">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-3 mb-1">
+          <h1 class="text-lg font-semibold" x-text="task.title || 'Untitled Task'"></h1>
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border"
+                :class="statusClasses(task.status)">
+            <template x-if="task.status === 'running'">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-slow"></span>
+            </template>
+            <span x-text="statusLabel(task.status)"></span>
+          </span>
+        </div>
+        <p class="text-sm text-slate-400" x-text="task.description || ''"></p>
+      </div>
+
+      <!-- Stats -->
+      <div class="flex items-center gap-5 flex-shrink-0">
+        <div class="text-center">
+          <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Duration</div>
+          <div class="text-sm font-semibold font-mono" x-text="task.duration || '0:00'"></div>
+        </div>
+        <div class="w-px h-8 bg-slate-800"></div>
+        <div class="text-center">
+          <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Tokens</div>
+          <div class="text-sm font-semibold font-mono" x-text="task.tokens ? (task.tokens / 1000).toFixed(1) + 'k' : '0'"></div>
+        </div>
+        <div class="w-px h-8 bg-slate-800"></div>
+        <div class="text-center">
+          <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Fixes</div>
+          <div class="text-sm font-semibold font-mono" x-text="task.fix_count || 0"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex items-center gap-1 mb-5 border-b border-slate-800 pb-px">
+    <template x-for="tab in [{id: 'log', label: 'Log'}, {id: 'diff', label: 'Diff'}, {id: 'reviews', label: 'Review History'}]" :key="tab.id">
+      <button @click="activeTab = tab.id"
+              :class="activeTab === tab.id
+                ? 'text-slate-100 border-b-2 border-emerald-500 -mb-px bg-transparent'
+                : 'text-slate-500 border-b-2 border-transparent -mb-px hover:text-slate-300'"
+              class="px-4 py-2.5 text-sm font-medium transition-all duration-200">
+        <span x-text="tab.label"></span>
+        <template x-if="tab.id === 'reviews' && reviews.length > 0">
+          <span class="ml-1.5 px-1.5 py-0.5 text-[10px] font-mono bg-slate-800 rounded-md" x-text="reviews.length"></span>
+        </template>
+      </button>
+    </template>
+  </div>
+
+  <!-- Tab Content -->
+
+  <!-- Log Tab -->
+  <div x-show="activeTab === 'log'" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
+    <div class="bg-slate-900/80 border border-slate-800 rounded-xl overflow-hidden">
+      <div class="max-h-[60vh] overflow-y-auto p-4 font-mono text-xs leading-relaxed relative terminal-scanline"
+           style="background: linear-gradient(180deg, #0c1018 0%, #0f172a 100%);">
+        <template x-for="(line, i) in logLines" :key="'log-' + i">
+          <div class="py-0.5 flex gap-3 hover:bg-slate-800/30 px-1 -mx-1 rounded"
+               :class="{
+                 'text-slate-300': line.level === 'info',
+                 'text-amber-400': line.level === 'warning',
+                 'text-red-400': line.level === 'error',
+                 'text-slate-500': line.level === 'debug',
+                 'text-emerald-400': line.level === 'success',
+               }">
+            <span class="text-slate-600 select-none flex-shrink-0 w-10 text-right" x-text="i + 1"></span>
+            <span class="text-slate-700 select-none flex-shrink-0 w-16" x-text="line.timestamp || ''"></span>
+            <span class="break-all" x-text="line.message"></span>
+          </div>
+        </template>
+        <template x-if="logLines.length === 0">
+          <div class="text-center text-slate-600 py-12">
+            <p>No log output available</p>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diff Tab -->
+  <div x-show="activeTab === 'diff'" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
+    <div class="bg-slate-900/80 border border-slate-800 rounded-xl overflow-hidden">
+      <div class="max-h-[60vh] overflow-y-auto p-4 font-mono text-xs leading-relaxed"
+           style="background: linear-gradient(180deg, #0c1018 0%, #0f172a 100%);">
+        <template x-for="(line, i) in diffLines" :key="'diff-' + i">
+          <div class="py-px flex"
+               :class="{
+                 'bg-emerald-500/8': line.type === 'add',
+                 'bg-red-500/8': line.type === 'remove',
+                 'bg-blue-500/5': line.type === 'header',
+               }">
+            <!-- Line number -->
+            <span class="text-slate-700 select-none w-10 text-right pr-3 flex-shrink-0 border-r border-slate-800/50 mr-3"
+                  x-text="line.number || ''"></span>
+            <!-- Diff indicator -->
+            <span class="w-4 flex-shrink-0 select-none"
+                  :class="{
+                    'text-emerald-500': line.type === 'add',
+                    'text-red-500': line.type === 'remove',
+                    'text-blue-400': line.type === 'header',
+                    'text-slate-700': line.type === 'context',
+                  }"
+                  x-text="line.type === 'add' ? '+' : line.type === 'remove' ? '-' : line.type === 'header' ? '@' : ' '">
+            </span>
+            <!-- Content -->
+            <span class="break-all"
+                  :class="{
+                    'text-emerald-300': line.type === 'add',
+                    'text-red-300': line.type === 'remove',
+                    'text-blue-300 font-semibold': line.type === 'header',
+                    'text-slate-400': line.type === 'context',
+                  }"
+                  x-text="line.content"></span>
+          </div>
+        </template>
+        <template x-if="diffLines.length === 0">
+          <div class="text-center text-slate-600 py-12">
+            <p>No diff available yet</p>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- Review History Tab -->
+  <div x-show="activeTab === 'reviews'" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
+
+    <template x-if="reviews.length > 0">
+      <div class="space-y-0 relative">
+        <!-- Vertical timeline line -->
+        <div class="absolute left-[19px] top-6 bottom-6 w-px bg-slate-800"></div>
+
+        <template x-for="(review, i) in reviews" :key="'review-' + i">
+          <div class="relative flex gap-4 animate-fade-in-up" :style="'animation-delay: ' + (i * 80) + 'ms; animation-fill-mode: backwards;'">
+            <!-- Timeline dot -->
+            <div class="flex-shrink-0 w-10 flex justify-center pt-5 z-10">
+              <div class="w-4 h-4 rounded-full border-2 border-slate-900 flex items-center justify-center"
+                   :class="{
+                     'bg-emerald-500': review.verdict === 'approved',
+                     'bg-red-500': review.verdict === 'rejected',
+                     'bg-amber-500': review.verdict === 'partial',
+                   }">
+              </div>
+            </div>
+
+            <!-- Review Card -->
+            <div class="flex-1 bg-slate-900/80 border border-slate-800 rounded-xl p-4 mb-3">
+              <!-- Header -->
+              <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-semibold"
+                        :class="{
+                          'text-emerald-400': review.verdict === 'approved',
+                          'text-red-400': review.verdict === 'rejected',
+                          'text-amber-400': review.verdict === 'partial',
+                        }">
+                    <span x-text="review.verdict === 'approved' ? 'Approved' : review.verdict === 'rejected' ? 'Rejected' : 'Needs Changes'"></span>
+                  </span>
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium border"
+                        :class="verdictClasses(review.verdict)">
+                    <svg class="w-2.5 h-2.5 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" :d="verdictIcon(review.verdict)" clip-rule="evenodd"/>
+                    </svg>
+                    <span x-text="'Cycle ' + (i + 1)"></span>
+                  </span>
+                </div>
+                <span class="text-[10px] text-slate-600 font-mono" x-text="review.timestamp || ''"></span>
+              </div>
+
+              <!-- Feedback -->
+              <div class="text-sm text-slate-300 leading-relaxed mb-3" x-text="review.feedback || 'No feedback provided'"></div>
+
+              <!-- Issues list (if rejected/partial) -->
+              <template x-if="review.issues && review.issues.length > 0">
+                <div class="space-y-1.5">
+                  <template x-for="(issue, j) in review.issues" :key="'issue-' + i + '-' + j">
+                    <div class="flex items-start gap-2 text-xs">
+                      <svg class="w-3 h-3 text-red-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                      </svg>
+                      <span class="text-slate-400" x-text="issue"></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <!-- Fix applied indicator -->
+              <template x-if="review.fix_applied">
+                <div class="mt-3 pt-3 border-t border-slate-800/60 flex items-center gap-2 text-xs text-emerald-400">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                  </svg>
+                  <span>Fix applied and re-submitted</span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <template x-if="reviews.length === 0">
+      <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-12 text-center">
+        <svg class="w-8 h-8 text-slate-700 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+        </svg>
+        <p class="text-sm text-slate-500">No reviews yet</p>
+        <p class="text-xs text-slate-600 mt-1">Reviews will appear here after the task is reviewed</p>
+      </div>
+    </template>
+
+  </div>
+
+</div>
+{% endblock %}
