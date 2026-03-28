@@ -12,7 +12,7 @@ from vtinker import beads, checks, opencode
 from vtinker.config import VTINKER_DIR, Config, State, save_state
 from vtinker.doom import DoomDetector
 from vtinker.gitignore import ensure_gitignore
-from vtinker.opencode import TokenUsage
+from vtinker.opencode import BudgetExhaustedError, TokenUsage
 from vtinker.parse import EpicDef, extract_epic, extract_tasks, extract_verdict
 from vtinker.prompts import load_prompts
 
@@ -31,6 +31,8 @@ class Orchestrator:
         self._log_file: Path | None = None
         self._prompts = load_prompts(config.prompts_dir)
         self._total_tokens = TokenUsage()
+        self._replan_count = 0
+        self._max_replans = 3
 
     # ------------------------------------------------------------------
     # Entry points
@@ -221,7 +223,8 @@ class Orchestrator:
             workdir=str(self.workdir),
         )
 
-        # Try up to 3 times — some models need a retry to produce the right format
+        # Generate initial plan (up to 3 format retries)
+        tasks = None
         for attempt in range(3):
             if attempt > 0:
                 _log("PLAN", f"retry {attempt}/2 — asking model to use ```task format")
@@ -233,22 +236,72 @@ class Orchestrator:
 
             result = self._opencode(prompt, phase="plan")
             tasks = extract_tasks(result.text)
-
             if tasks:
-                self._create_tasks_from_defs(self.epic_id, tasks)
-                _log("PLAN", f"created {len(tasks)} tasks")
-                self._audit("plan_created", {"task_count": len(tasks)})
-                return
+                break
 
             _log("PLAN", f"no tasks parsed (attempt {attempt + 1}/3)")
             self._audit("plan_retry", {"attempt": attempt + 1, "output_len": len(result.text)})
 
-        _log("PLAN", f"FAILED after 3 attempts. Raw output:\n{result.text[:1000]}")
-        self._audit("plan_failed", {"output_len": len(result.text)})
-        raise VtinkerError(
-            "PLAN phase failed: model did not produce any ```task blocks after 3 attempts. "
-            "Try a different model or provide tasks manually."
-        )
+        if not tasks:
+            _log("PLAN", f"FAILED after 3 attempts. Raw output:\n{result.text[:1000]}")
+            self._audit("plan_failed", {"output_len": len(result.text)})
+            raise VtinkerError(
+                "PLAN phase failed: model did not produce any ```task blocks after 3 attempts. "
+                "Try a different model or provide tasks manually."
+            )
+
+        # Plan review loop — iteratively improve the plan
+        tasks = self._plan_review_loop(epic, tasks)
+
+        self._create_tasks_from_defs(self.epic_id, tasks)
+        _log("PLAN", f"created {len(tasks)} tasks")
+        self._audit("plan_created", {"task_count": len(tasks)})
+
+    def _plan_review_loop(self, epic: dict, tasks: list, max_rounds: int = 3) -> list:
+        """Iteratively review and improve the plan until the model says GOOD."""
+        for review_round in range(max_rounds):
+            # Format current plan as text for the review prompt
+            plan_text = self._format_plan_text(tasks)
+            _log("PLAN", f"review round {review_round + 1}/{max_rounds} ({len(tasks)} tasks)")
+
+            result = self._opencode(
+                self._prompts["plan_review"].format(
+                    epic_title=epic.get("title", ""),
+                    epic_description=epic.get("description", ""),
+                    current_plan=plan_text,
+                ),
+                phase="plan",
+            )
+
+            verdict, _ = extract_verdict(result.text)
+            if verdict == "GOOD":
+                _log("PLAN", "plan review: GOOD — no improvements needed")
+                break
+
+            improved_tasks = extract_tasks(result.text)
+            if improved_tasks:
+                _log("PLAN", f"plan review: IMPROVED — {len(tasks)} → {len(improved_tasks)} tasks")
+                tasks = improved_tasks
+            else:
+                _log("PLAN", "plan review: could not parse improved plan, keeping current")
+                break
+
+        return tasks
+
+    @staticmethod
+    def _format_plan_text(tasks: list) -> str:
+        """Format task list as numbered text for plan review."""
+        lines = []
+        for i, t in enumerate(tasks, 1):
+            deps = ", ".join(str(d) for d in t.depends) if t.depends else "none"
+            lines.append(f"Task {i}: {t.title}")
+            lines.append(f"  depends: {deps}")
+            lines.append(f"  atomic: {t.atomic}")
+            lines.append(f"  description: {t.description[:200]}")
+            if t.acceptance:
+                lines.append(f"  acceptance: {t.acceptance[:200]}")
+            lines.append("")
+        return "\n".join(lines)
 
     def _create_tasks_from_defs(self, parent_id: str, tasks: list) -> dict[int, str]:
         """Create beads tasks from parsed TaskDefs. Returns id_map."""
@@ -347,15 +400,21 @@ class Orchestrator:
             self._fix(task, issues, check_results)
             self._ensure_committed(task, fix_attempt=attempt + 1)
 
-        _log("TASK", f"max retries reached for {task_id} — STOPPING")
+        _log("TASK", f"max retries reached for {task_id}")
         _log("TASK", f"last issues:\n{issues}")
         beads.update(task_id, status="blocked",
                      notes=f"Max retries ({self.config.max_retries}) reached. Last issues:\n{issues}")
         self._audit("task_max_retries", {"task_id": task_id})
-        raise VtinkerError(
-            f"Task {task_id} failed after {self.config.max_retries} attempts. "
-            f"Fix manually then run: vtinker resume"
-        )
+
+        # Try replanning instead of stopping
+        if self._replan_count < self._max_replans:
+            self._replan(task, issues)
+        else:
+            raise VtinkerError(
+                f"Task {task_id} failed after {self.config.max_retries} attempts "
+                f"and {self._replan_count} replans exhausted. "
+                f"Fix manually then run: vtinker resume"
+            )
 
     # ------------------------------------------------------------------
     # Sub-phases
@@ -397,6 +456,11 @@ class Orchestrator:
 
         context_files = _extract_file_refs(task.get("description", ""), self.workdir)
 
+        # For test tasks, auto-attach source files being tested
+        title_lower = task.get("title", "").lower()
+        if "test" in title_lower and not context_files:
+            context_files = _find_test_sources(task, self.workdir)
+
         self._opencode(
             self._prompts["execute"].format(
                 task_title=task.get("title", ""),
@@ -428,10 +492,13 @@ class Orchestrator:
         if not diff.strip():
             diff = "(no changes detected)"
 
+        file_listing = _list_project_files(self.workdir)
+
         result = self._opencode(
             self._prompts["review"].format(
                 task_title=task.get("title", ""),
                 acceptance=_get_acceptance(task),
+                file_listing=file_listing,
                 git_diff=_truncate(diff, 8000),
                 check_results=checks.format_results(check_results),
             ),
@@ -459,6 +526,73 @@ class Orchestrator:
             ),
             phase="fix",
         )
+
+    def _replan(self, failed_task: dict, failure_reason: str) -> None:
+        """Mid-flight replanning: review project state, cancel open tasks, create new plan."""
+        self._replan_count += 1
+        _log("REPLAN", f"replanning ({self._replan_count}/{self._max_replans}) "
+             f"after {failed_task.get('id', '?')} failed")
+        self._audit("replan_start", {
+            "failed_task": failed_task.get("id"),
+            "replan_count": self._replan_count,
+        })
+
+        epic = beads.show(self.epic_id)
+        all_children = beads.children(self.epic_id)
+        completed = [c for c in all_children if c.get("status") in ("closed", "done")]
+        open_tasks = [c for c in all_children
+                      if c.get("status") not in ("closed", "done")]
+
+        completed_summary = "\n".join(
+            f"- {c.get('title', c.get('id', '?'))}" for c in completed
+        ) or "None"
+        open_summary = "\n".join(
+            f"- {c.get('title', c.get('id', '?'))} [{c.get('status', '?')}]"
+            for c in open_tasks
+        ) or "None"
+
+        # List existing files so the model knows what's already built
+        file_listing = _list_project_files(self.workdir)
+
+        check_results = checks.run_checks(self.config.checks, self.workdir)
+
+        result = self._opencode(
+            self._prompts["replan"].format(
+                epic_title=epic.get("title", ""),
+                epic_description=epic.get("description", ""),
+                acceptance=epic.get("acceptance_criteria", epic.get("acceptance", "")),
+                failed_task_title=failed_task.get("title", ""),
+                failure_reason=failure_reason,
+                completed_summary=completed_summary,
+                open_summary=open_summary,
+                file_listing=file_listing,
+                check_results=checks.format_results(check_results),
+            ),
+            phase="plan",
+        )
+
+        new_tasks = extract_tasks(result.text)
+        if not new_tasks:
+            _log("REPLAN", "no tasks parsed from replan output — stopping")
+            raise VtinkerError(
+                f"Replan failed to produce tasks after {failed_task.get('id')} blocked. "
+                f"Fix manually then run: vtinker resume"
+            )
+
+        # Close all remaining open tasks (they're being replaced)
+        for t in open_tasks:
+            tid = t.get("id", "")
+            beads.close(tid, reason="Replaced by replan")
+            _log("REPLAN", f"closed old task: {tid}")
+
+        # Create new tasks under the epic
+        self._create_tasks_from_defs(self.epic_id, new_tasks)
+        _log("REPLAN", f"created {len(new_tasks)} new tasks, re-entering loop")
+        self._audit("replan_done", {"new_task_count": len(new_tasks)})
+
+        # Reset doom detector and re-enter execute loop
+        self.doom = DoomDetector(threshold=self.config.max_retries)
+        self._execute_loop()
 
     def _ensure_committed(self, task: dict, fix_attempt: int | None = None) -> None:
         """Ensure any changes from execute/fix are committed."""
@@ -637,6 +771,40 @@ def _read_multiline() -> list[str]:
 def _get_acceptance(bead: dict) -> str:
     """Get acceptance criteria from a bead dict, handling field name variants."""
     return bead.get("acceptance_criteria", bead.get("acceptance", bead.get("notes", "")))
+
+
+def _find_test_sources(task: dict, workdir: Path) -> list[Path]:
+    """For test tasks, find source modules to attach as context."""
+    desc = task.get("description", "") + " " + task.get("title", "")
+    desc_lower = desc.lower()
+    files = []
+    # Find all .py files in the project
+    result = subprocess.run(
+        ["git", "ls-files", "*.py"], cwd=workdir, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return files
+    all_py = [workdir / f for f in result.stdout.strip().split("\n") if f]
+    for py in all_py:
+        if py.name.startswith("test_") or "/tests/" in str(py):
+            continue
+        # Attach source file if its module name appears in the task description
+        module_name = py.stem  # e.g. "parser" from "parser.py"
+        if module_name in desc_lower and py.is_file():
+            files.append(py)
+    return files[:10]  # limit to 10 files
+
+
+def _list_project_files(workdir: Path) -> str:
+    """List project source files (not hidden, not __pycache__) for replan context."""
+    result = subprocess.run(
+        ["git", "ls-files"], cwd=workdir, capture_output=True, text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        files = [f for f in result.stdout.strip().split("\n")
+                 if not f.startswith(".") and "__pycache__" not in f]
+        return "\n".join(files[:100]) or "(empty project)"
+    return "(empty project)"
 
 
 def _extract_file_refs(description: str, workdir: Path) -> list[Path]:

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vtinker import beads
 from vtinker.config import Check, load_config, load_state
+from vtinker.opencode import BudgetExhaustedError
 from vtinker.orchestrator import VtinkerError, Orchestrator
 
 
@@ -48,8 +49,9 @@ def main() -> None:
         _handle_status(args)
         return
 
-    config = load_config(getattr(args, "config", None))
     workdir = getattr(args, "dir", Path(".")).resolve()
+    config_path = getattr(args, "config", None) or workdir
+    config = load_config(config_path)
     config.workdir = workdir
 
     try:
@@ -83,6 +85,10 @@ def main() -> None:
                 orch.branch_base = state.branch_base
             orch.resume(epic_id)
 
+    except BudgetExhaustedError as e:
+        print(f"\n[vtinker] BUDGET EXHAUSTED: {e}", file=sys.stderr)
+        print("[vtinker] Add credits and run: vtinker resume", file=sys.stderr)
+        sys.exit(2)
     except VtinkerError as e:
         print(f"\n[vtinker] STOPPED: {e}", file=sys.stderr)
         sys.exit(1)

@@ -33,6 +33,16 @@ class TokenUsage:
         return self.input + self.output
 
 
+class OpenCodeError(RuntimeError):
+    """Error from opencode that should stop execution (not retry)."""
+    pass
+
+
+class BudgetExhaustedError(OpenCodeError):
+    """API credits/budget exhausted — no point retrying."""
+    pass
+
+
 @dataclass
 class RunResult:
     exit_code: int
@@ -103,6 +113,21 @@ def verbose_progress(event: dict) -> None:
 
     elif etype == "step_finish":
         print(file=sys.stderr)  # newline after streamed text
+
+
+_BUDGET_PATTERNS = [
+    "insufficient", "budget", "credit", "quota", "exceeded",
+    "payment", "billing", "402", "limit reached",
+    "no remaining balance", "out of credits",
+]
+
+
+def _check_budget_error(msg: str) -> None:
+    """Raise BudgetExhaustedError if the message indicates no credits/budget."""
+    msg_lower = msg.lower()
+    for pattern in _BUDGET_PATTERNS:
+        if pattern in msg_lower:
+            raise BudgetExhaustedError(f"API budget exhausted: {msg}")
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +205,12 @@ def run(
 
             events.append(event)
 
+            # Check for error events (budget exhausted, model not found, etc.)
+            if event.get("type") == "error":
+                err = event.get("error", {})
+                err_msg = err.get("data", {}).get("message", "") or err.get("name", "unknown error")
+                _check_budget_error(err_msg)
+
             if not session_id and event.get("sessionID"):
                 session_id = event["sessionID"]
 
@@ -217,6 +248,15 @@ def run(
     finally:
         if prompt_file:
             Path(prompt_file).unlink(missing_ok=True)
+
+    # Check for errors in non-zero exit with no text output
+    if proc.returncode and not text_parts:
+        # Look for error events we might have missed
+        for evt in events:
+            if evt.get("type") == "error":
+                err = evt.get("error", {})
+                err_msg = err.get("data", {}).get("message", "") or err.get("name", "")
+                _check_budget_error(err_msg)
 
     return RunResult(
         exit_code=proc.returncode or 0,

@@ -8,7 +8,7 @@ from vtinker.prompts import load_prompts, DIALOG, PLAN, EXECUTE, REVIEW, FIX, FI
 class TestLoadPrompts:
     def test_defaults(self):
         prompts = load_prompts()
-        assert len(prompts) == 7
+        assert len(prompts) == 9
         assert prompts["dialog"] == DIALOG
         assert prompts["plan"] == PLAN
         assert prompts["execute"] == EXECUTE

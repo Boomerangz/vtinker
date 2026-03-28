@@ -65,6 +65,8 @@ Rules:
 - Do NOT write code. Only plan.
 - Only read source files if you need to understand existing code. If the project is empty or new, skip file reading.
 - If a task is clearly simple (single file, trivial change), add "atomic: true" to its fields
+- CRITICAL: dependencies must be correct. If task B imports or uses files/modules created by task A, then B MUST list A in its depends field. Double-check every depends value before outputting.
+- Test tasks must depend on the implementation tasks they test
 
 Output each task inside a fenced block (the ``` markers are required):
 
@@ -152,6 +154,9 @@ TASK: {task_title}
 
 ACCEPTANCE CRITERIA:
 {acceptance}
+
+PROJECT FILES:
+{file_listing}
 
 GIT DIFF:
 {git_diff}
@@ -250,6 +255,101 @@ acceptance:
 ```
 """
 
+PLAN_REVIEW = """\
+Review and improve this project plan. Look for issues and fix them.
+
+EPIC: {epic_title}
+
+DESCRIPTION:
+{epic_description}
+
+CURRENT PLAN:
+{current_plan}
+
+Check for these common problems:
+1. DEPENDENCY ERRORS: If task B uses/imports files created by task A, does B depend on A? If not, fix it.
+2. GRANULARITY: Are any tasks too large (touching 5+ files, multiple logical changes)? Split them.
+3. ORDERING: Would a different order be more natural or reduce risk?
+4. MISSING TASKS: Are there acceptance criteria not covered by any task?
+5. TEST COVERAGE: Do test tasks depend on the implementation tasks they test?
+
+If the plan is good and you have no improvements, respond with:
+VERDICT: GOOD
+
+If you found issues, respond with:
+VERDICT: IMPROVED
+
+Then output the COMPLETE improved plan (all tasks, not just changed ones) as ```task blocks:
+
+```task
+title: <short title>
+depends: <comma-separated task numbers, or "none">
+atomic: <true or false>
+
+description:
+<multi-line description>
+
+acceptance:
+<specific, testable criteria>
+```
+"""
+
+REPLAN = """\
+A task has failed after multiple attempts. Review the project state and rebuild the plan.
+
+EPIC: {epic_title}
+
+DESCRIPTION:
+{epic_description}
+
+ACCEPTANCE CRITERIA:
+{acceptance}
+
+FAILED TASK: {failed_task_title}
+FAILURE REASON:
+{failure_reason}
+
+TASKS COMPLETED SO FAR:
+{completed_summary}
+
+REMAINING OPEN TASKS:
+{open_summary}
+
+EXISTING FILES IN PROJECT:
+{file_listing}
+
+CHECK RESULTS:
+{check_results}
+
+Analyze the situation:
+1. Why did the failed task fail? (missing dependency? wrong approach? task too large?)
+2. What has already been built and is working?
+3. What is still needed to meet the epic acceptance criteria?
+
+Now create a NEW set of tasks to replace ALL remaining open tasks (including the failed one).
+The new plan should:
+- Build on what already exists (do NOT redo completed work)
+- Fix the ordering/dependency issues that caused the failure
+- Ensure each task's dependencies are correct (if task B uses files from task A, B must depend on A)
+- Keep tasks small and atomic where possible
+
+Output each task inside a fenced block:
+
+```task
+title: <short title>
+depends: <comma-separated task numbers within this new plan, or "none">
+atomic: <true or false>
+
+description:
+<multi-line description — mention specific files to create/modify>
+
+acceptance:
+<specific, testable criteria>
+```
+
+Output as many ```task blocks as needed, one after another.
+"""
+
 # ---------------------------------------------------------------------------
 # Template loader
 # ---------------------------------------------------------------------------
@@ -262,6 +362,8 @@ _TEMPLATES = {
     "review": "REVIEW",
     "fix": "FIX",
     "final_review": "FINAL_REVIEW",
+    "plan_review": "PLAN_REVIEW",
+    "replan": "REPLAN",
 }
 
 
