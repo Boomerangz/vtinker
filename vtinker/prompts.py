@@ -106,6 +106,7 @@ Rules:
 - CRITICAL: dependencies must be correct. If task B imports or uses files/modules created by task A, then B MUST list A in its depends field. Double-check every depends value before outputting.
 - Test tasks must depend on the implementation tasks they test
 - If reference docs are available, attach relevant URLs to each task in the "refs:" field. The executor will use webfetch to read them. Only attach refs that are directly relevant to that specific task.
+- PARALLELISM: If multiple tasks have the same dependencies and touch DIFFERENT files/modules with no overlap, assign them the same "parallel_group" label (e.g., "A", "B"). Tasks in the same group can run concurrently. Only group tasks that are truly independent — same deps, different files, no shared state. When in doubt, don't group.
 
 Output each task inside a fenced block (the ``` markers are required):
 
@@ -113,6 +114,7 @@ Output each task inside a fenced block (the ``` markers are required):
 title: <short title>
 depends: <comma-separated task numbers, or "none">
 atomic: <true or false — true if this is clearly a small, single-file change>
+parallel_group: <group label like "A", "B", or empty if sequential>
 
 description:
 <multi-line description — mention files, functions, patterns>

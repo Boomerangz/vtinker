@@ -24,11 +24,15 @@ class Config:
     opencode_model: str | None = None
     opencode_agent: str | None = None
     prompts_dir: Path | None = None
+    parallel_tasks: int = 1  # >1 to run independent tasks concurrently
     # Per-phase model overrides (fall back to opencode_model if not set)
     model_research: str | None = None
     model_plan: str | None = None
-    model_execute: str | None = None
-    model_review: str | None = None
+    model_execute: str | None = None       # single model (backward compat)
+    model_review: str | None = None        # single model (backward compat)
+    execute_models: list[str] = field(default_factory=list)  # round-robin pool
+    review_models: list[str] = field(default_factory=list)   # multi-reviewer pool
+    review_mode: str = "all"  # "all" = parallel (FAIL if any FAIL), "sequential" = one-by-one
 
 
 def _find_config(workdir: Path) -> Path | None:
@@ -62,20 +66,42 @@ def load_config(path: Path | None = None) -> Config:
 
     models = raw.get("models", {})
 
+    # Support both string and array for execute/review
+    raw_execute = models.get("execute")
+    raw_review = models.get("review")
+
+    if isinstance(raw_execute, list):
+        execute_models = raw_execute
+        model_execute = raw_execute[0] if raw_execute else None
+    else:
+        execute_models = [raw_execute] if raw_execute else []
+        model_execute = raw_execute
+
+    if isinstance(raw_review, list):
+        review_models = raw_review
+        model_review = raw_review[0] if raw_review else None
+    else:
+        review_models = [raw_review] if raw_review else []
+        model_review = raw_review
+
     return Config(
         workdir=Path(raw.get("workdir", ".")).resolve(),
         branch_prefix=raw.get("branch_prefix", "vtinker/"),
         use_worktree=raw.get("use_worktree", False),
         max_retries=raw.get("max_retries", 10),
         opencode_timeout=raw.get("opencode_timeout", 900),
+        parallel_tasks=raw.get("parallel_tasks", 1),
         checks=checks,
         opencode_model=oc.get("model"),
         opencode_agent=oc.get("agent"),
         prompts_dir=Path(prompts_dir) if prompts_dir else None,
         model_research=models.get("research"),
         model_plan=models.get("plan"),
-        model_execute=models.get("execute"),
-        model_review=models.get("review"),
+        model_execute=model_execute,
+        model_review=model_review,
+        execute_models=execute_models,
+        review_models=review_models,
+        review_mode=models.get("review_mode", "all"),
     )
 
 

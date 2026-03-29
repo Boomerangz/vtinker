@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from vtinker import beads, checks, opencode
@@ -34,6 +35,8 @@ class Orchestrator:
         self._replan_count = 0
         self._max_replans = 3
         self._research_refs: list[str] = []
+        self._git_lock = threading.Lock()
+        self._execute_rr_idx = 0  # round-robin index for execute models
 
     # ------------------------------------------------------------------
     # Entry points
@@ -441,6 +444,8 @@ class Orchestrator:
                 notes_parts.append("atomic: true")
             if task.refs:
                 notes_parts.append("refs: " + ", ".join(task.refs))
+            if task.parallel_group:
+                notes_parts.append(f"parallel_group: {task.parallel_group}")
             notes = "\n".join(notes_parts) or None
             bead_id = beads.create_task(
                 parent_id=parent_id,
@@ -461,7 +466,10 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _execute_loop(self) -> None:
-        _log("LOOP", "starting execute loop")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        max_parallel = self.config.parallel_tasks
+        _log("LOOP", f"starting execute loop (parallel={max_parallel})")
         iteration = 0
         max_iterations = 100
 
@@ -481,11 +489,58 @@ class Orchestrator:
                     _log("LOOP", f"  {t.get('id', '?')}: {t.get('title', '?')} [{t.get('status', '?')}]")
                 break
 
-            task = ready_tasks[0]
-            self._process_task(task)
+            if max_parallel <= 1:
+                # Sequential mode — original behavior
+                self._process_task(ready_tasks[0])
+                continue
+
+            # Parallel mode — group ready tasks by parallel_group
+            batch = self._select_parallel_batch(ready_tasks, max_parallel)
+
+            if len(batch) == 1:
+                self._process_task(batch[0])
+            else:
+                titles = [t.get("title", t.get("id", "?")) for t in batch]
+                _log("LOOP", f"running {len(batch)} tasks in parallel: {titles}")
+                errors = []
+                with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                    futures = {pool.submit(self._process_task, t): t for t in batch}
+                    for future in as_completed(futures):
+                        task = futures[future]
+                        try:
+                            future.result()
+                        except Exception as e:
+                            _log("LOOP", f"parallel task {task.get('id', '?')} failed: {e}")
+                            errors.append(e)
+                if errors:
+                    # Re-raise first error to trigger replan/stop
+                    raise errors[0]
 
         if iteration >= max_iterations:
             _log("LOOP", "safety limit reached — stopping")
+
+    @staticmethod
+    def _select_parallel_batch(ready_tasks: list[dict], max_parallel: int) -> list[dict]:
+        """Select tasks that can run in parallel from ready tasks.
+
+        Rules:
+        - Tasks with the same parallel_group run together
+        - Tasks without a group run alone (sequential)
+        - Never exceed max_parallel
+        """
+        if not ready_tasks:
+            return []
+
+        first = ready_tasks[0]
+        first_group = _get_parallel_group(first)
+
+        # If first task has no group, run it alone
+        if not first_group:
+            return [first]
+
+        # Collect all tasks in the same group
+        batch = [t for t in ready_tasks if _get_parallel_group(t) == first_group]
+        return batch[:max_parallel]
 
     def _process_task(self, task: dict) -> None:
         task_id = task.get("id", "?")
@@ -618,6 +673,17 @@ class Orchestrator:
         check_results: list[checks.CheckResult],
         pre_execute_rev: str | None,
     ) -> tuple[str, str]:
+        review_models = self.config.review_models
+        if len(review_models) > 1:
+            return self._multi_review(task, check_results, pre_execute_rev)
+        return self._single_review(task, check_results, pre_execute_rev)
+
+    def _build_review_prompt(
+        self,
+        task: dict,
+        check_results: list[checks.CheckResult],
+        pre_execute_rev: str | None,
+    ) -> str:
         if pre_execute_rev:
             diff = _git_output(self.workdir, "diff", pre_execute_rev, "HEAD")
         else:
@@ -632,20 +698,93 @@ class Orchestrator:
 
         file_listing = _list_project_files(self.workdir)
 
-        result = self._opencode(
-            self._prompts["review"].format(
-                task_title=task.get("title", ""),
-                acceptance=_get_acceptance(task),
-                file_listing=file_listing,
-                git_diff=_truncate(diff, 8000),
-                check_results=checks.format_results(check_results),
-            ),
-            phase="review",
+        return self._prompts["review"].format(
+            task_title=task.get("title", ""),
+            acceptance=_get_acceptance(task),
+            file_listing=file_listing,
+            git_diff=_truncate(diff, 8000),
+            check_results=checks.format_results(check_results),
         )
 
+    def _single_review(
+        self,
+        task: dict,
+        check_results: list[checks.CheckResult],
+        pre_execute_rev: str | None,
+        model_override: str | None = None,
+    ) -> tuple[str, str]:
+        prompt = self._build_review_prompt(task, check_results, pre_execute_rev)
+
+        if model_override:
+            result = opencode.run(
+                prompt, self.workdir,
+                model=model_override,
+                timeout=self.config.opencode_timeout,
+                on_event=opencode.default_progress,
+            )
+            self._total_tokens += result.tokens
+        else:
+            result = self._opencode(prompt, phase="review")
+
         verdict, issues = extract_verdict(result.text)
-        self._audit("review", {"task_id": task.get("id"), "verdict": verdict, "has_issues": bool(issues)})
+        model_name = model_override or self._model_for("review") or "default"
+        self._audit("review", {
+            "task_id": task.get("id"), "verdict": verdict,
+            "has_issues": bool(issues), "model": model_name,
+        })
         return (verdict, issues)
+
+    def _multi_review(
+        self,
+        task: dict,
+        check_results: list[checks.CheckResult],
+        pre_execute_rev: str | None,
+    ) -> tuple[str, str]:
+        """Run review with multiple models. Mode controls behavior."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        review_models = self.config.review_models
+        mode = self.config.review_mode
+        task_id = task.get("id", "?")
+
+        _log("REVIEW", f"multi-review ({mode}) with {len(review_models)} models: {review_models}")
+
+        if mode == "all":
+            # Parallel — all models review at once
+            results: list[tuple[str, str, str]] = []  # (verdict, issues, model)
+            with ThreadPoolExecutor(max_workers=len(review_models)) as pool:
+                futures = {}
+                for model in review_models:
+                    future = pool.submit(
+                        self._single_review, task, check_results, pre_execute_rev, model,
+                    )
+                    futures[future] = model
+
+                for future in as_completed(futures):
+                    model = futures[future]
+                    verdict, issues = future.result()
+                    results.append((verdict, issues, model))
+                    _log("REVIEW", f"  {model}: {verdict}")
+
+            # FAIL if any reviewer says FAIL
+            fails = [(v, i, m) for v, i, m in results if v == "FAIL"]
+            if fails:
+                all_issues = "\n".join(
+                    f"[{m}] {i}" for _, i, m in fails
+                )
+                return ("FAIL", all_issues)
+            return ("PASS", "")
+
+        else:
+            # Sequential — run one by one, stop on first FAIL
+            for model in review_models:
+                verdict, issues = self._single_review(
+                    task, check_results, pre_execute_rev, model,
+                )
+                _log("REVIEW", f"  {model}: {verdict}")
+                if verdict == "FAIL":
+                    return ("FAIL", f"[{model}] {issues}")
+            return ("PASS", "")
 
     def _fix(self, task: dict, issues: str, check_results: list[checks.CheckResult]) -> None:
         diff = _git_output(self.workdir, "diff", "HEAD~1")
@@ -733,29 +872,30 @@ class Orchestrator:
         self._execute_loop()
 
     def _ensure_committed(self, task: dict, fix_attempt: int | None = None) -> None:
-        """Ensure any changes from execute/fix are committed."""
-        status = _git_output(self.workdir, "status", "--porcelain")
-        if not status.strip():
-            return
+        """Ensure any changes from execute/fix are committed. Thread-safe."""
+        with self._git_lock:
+            status = _git_output(self.workdir, "status", "--porcelain")
+            if not status.strip():
+                return
 
-        title = task.get("title", task.get("id", "task"))
-        if fix_attempt:
-            msg = f"vtinker: fix #{fix_attempt} for {title}"
-        else:
-            msg = f"vtinker: {title}"
+            title = task.get("title", task.get("id", "task"))
+            if fix_attempt:
+                msg = f"vtinker: fix #{fix_attempt} for {title}"
+            else:
+                msg = f"vtinker: {title}"
 
-        # Selective add: only tracked files + new files, skip vtinker artifacts
-        # Add all changes except vtinker artifacts
-        subprocess.run(
-            ["git", "add", "-A", "--", ".", ":(exclude).vtinker", ":(exclude).vtinker-*"],
-            cwd=self.workdir, capture_output=True, text=True,
-        )
-        proc = subprocess.run(
-            ["git", "commit", "-m", msg],
-            cwd=self.workdir, capture_output=True, text=True,
-        )
-        if proc.returncode == 0:
-            self._audit("auto_commit", {"message": msg})
+            # Selective add: only tracked files + new files, skip vtinker artifacts
+            # Add all changes except vtinker artifacts
+            subprocess.run(
+                ["git", "add", "-A", "--", ".", ":(exclude).vtinker", ":(exclude).vtinker-*"],
+                cwd=self.workdir, capture_output=True, text=True,
+            )
+            proc = subprocess.run(
+                ["git", "commit", "-m", msg],
+                cwd=self.workdir, capture_output=True, text=True,
+            )
+            if proc.returncode == 0:
+                self._audit("auto_commit", {"message": msg})
 
     # ------------------------------------------------------------------
     # Phase 8: FINAL REVIEW
@@ -827,16 +967,25 @@ class Orchestrator:
     # OpenCode wrapper
     # ------------------------------------------------------------------
 
+    def _next_execute_model(self) -> str | None:
+        """Round-robin through execute models."""
+        pool = self.config.execute_models
+        if not pool:
+            return self.config.model_execute
+        model = pool[self._execute_rr_idx % len(pool)]
+        self._execute_rr_idx += 1
+        return model
+
     def _model_for(self, phase: str) -> str | None:
         """Get the model for a specific phase, falling back to default."""
+        if phase in ("execute", "fix"):
+            return self._next_execute_model()
         overrides = {
             "research": self.config.model_research,
             "plan": self.config.model_plan,
-            "refine": self.config.model_plan,  # refine uses plan model
-            "execute": self.config.model_execute,
+            "refine": self.config.model_plan,
             "review": self.config.model_review,
-            "fix": self.config.model_execute,  # fix uses execute model
-            "final": self.config.model_review,  # final review uses review model
+            "final": self.config.model_review,
         }
         return overrides.get(phase) or self.config.opencode_model
 
@@ -926,6 +1075,16 @@ def _read_multiline() -> list[str]:
 def _get_acceptance(bead: dict) -> str:
     """Get acceptance criteria from a bead dict, handling field name variants."""
     return bead.get("acceptance_criteria", bead.get("acceptance", bead.get("notes", "")))
+
+
+def _get_parallel_group(task: dict) -> str:
+    """Extract parallel_group from task notes."""
+    notes = task.get("notes", "")
+    for line in notes.split("\n"):
+        line = line.strip()
+        if line.startswith("parallel_group:"):
+            return line[len("parallel_group:"):].strip()
+    return ""
 
 
 def _get_task_refs(task: dict) -> list[str]:

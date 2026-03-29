@@ -15,6 +15,7 @@ from vtinker.config import Check
 _KNOWN_FIELDS = frozenset({
     "title", "description", "acceptance", "depends",
     "branch", "worktree", "checks", "atomic", "refs",
+    "parallel_group",
 })
 
 
@@ -36,6 +37,7 @@ class TaskDef:
     depends: list[int] = field(default_factory=list)
     atomic: bool = False
     refs: list[str] = field(default_factory=list)
+    parallel_group: str = ""  # tasks with same group can run concurrently
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,8 @@ def extract_tasks(text: str) -> list[TaskDef]:
                 url = line.strip().lstrip("- ")
                 if url.startswith("http://") or url.startswith("https://"):
                     task.refs.append(url)
+
+        task.parallel_group = sections.get("parallel_group", "").strip()
 
         if task.title:
             tasks.append(task)
