@@ -542,10 +542,18 @@ class Orchestrator:
         batch = [t for t in ready_tasks if _get_parallel_group(t) == first_group]
         return batch[:max_parallel]
 
+    def _progress_str(self) -> str:
+        """Return progress like [5/15] based on beads state."""
+        all_children = beads.children(self.epic_id)
+        total = len(all_children)
+        done = sum(1 for c in all_children if c.get("status") in ("closed", "done"))
+        return f"[{done}/{total}]"
+
     def _process_task(self, task: dict) -> None:
         task_id = task.get("id", "?")
         self._task_iteration += 1
-        _log("TASK", f"[{self._task_iteration}] {task_id}: {task.get('title', '')}")
+        progress = self._progress_str()
+        _log("TASK", f"{progress} {task_id}: {task.get('title', '')}")
         self._audit("task_start", {"task_id": task_id, "title": task.get("title", "")})
 
         # Check for existing children (already refined)
@@ -574,18 +582,18 @@ class Orchestrator:
 
             if verdict == "PASS":
                 beads.close(task_id, reason="Completed and reviewed")
-                _log("TASK", f"DONE: {task_id}")
+                _log("TASK", f"{self._progress_str()} DONE: {task_id}")
                 self._audit("task_done", {"task_id": task_id})
                 return
 
             self.doom.record(task_id, issues)
             if self.doom.is_looping():
-                _log("TASK", f"DOOM LOOP on {task_id} — needs manual intervention")
+                _log("TASK", f"{self._progress_str()} DOOM LOOP on {task_id}")
                 beads.update(task_id, notes=f"Doom loop after {attempt + 1} attempts:\n{issues}")
                 self._audit("doom_loop", {"task_id": task_id, "attempt": attempt + 1})
                 return
 
-            _log("TASK", f"fix attempt {attempt + 1}/{self.config.max_retries}")
+            _log("TASK", f"{self._progress_str()} fix attempt {attempt + 1}/{self.config.max_retries}")
             pre_fix_rev = _git_rev(self.workdir)
             self._fix(task, issues, check_results)
             self._ensure_committed(task, fix_attempt=attempt + 1)
