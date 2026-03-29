@@ -585,8 +585,21 @@ class Orchestrator:
                 return
 
             _log("TASK", f"fix attempt {attempt + 1}/{self.config.max_retries}")
+            pre_fix_rev = _git_rev(self.workdir)
             self._fix(task, issues, check_results)
             self._ensure_committed(task, fix_attempt=attempt + 1)
+            post_fix_rev = _git_rev(self.workdir)
+
+            if pre_fix_rev == post_fix_rev:
+                _log("TASK", f"fix produced no changes — model is stuck, triggering replan")
+                self._audit("fix_no_changes", {"task_id": task_id, "attempt": attempt + 1})
+                beads.update(task_id, status="blocked",
+                             notes=f"Fix produced no changes after {attempt + 1} attempts:\n{issues}")
+                if self._replan_count < self._max_replans:
+                    self._replan(task, f"Fix produced no code changes. Issues:\n{issues}")
+                    return
+                raise VtinkerError(f"Task {task_id} stuck: fix produces no changes, replans exhausted")
+
 
         _log("TASK", f"max retries reached for {task_id}")
         _log("TASK", f"last issues:\n{issues}")
