@@ -544,7 +544,8 @@ class Orchestrator:
 
     def _process_task(self, task: dict) -> None:
         task_id = task.get("id", "?")
-        _log("TASK", f"{task_id}: {task.get('title', '')}")
+        self._task_iteration += 1
+        _log("TASK", f"[{self._task_iteration}] {task_id}: {task.get('title', '')}")
         self._audit("task_start", {"task_id": task_id, "title": task.get("title", "")})
 
         # Check for existing children (already refined)
@@ -1002,6 +1003,8 @@ class Orchestrator:
         }
         return overrides.get(phase) or self.config.opencode_model
 
+    _task_iteration: int = 0  # tracks current task number for progress display
+
     def _opencode(
         self,
         prompt: str,
@@ -1013,12 +1016,17 @@ class Orchestrator:
         if timeout is None:
             timeout = self.config.opencode_timeout
         model = self._model_for(phase) if phase else self.config.opencode_model
+        progress = opencode.ProgressContext(
+            phase=phase or "",
+            model=model or "",
+            iteration=self._task_iteration,
+        )
         result = opencode.run(
             prompt, self.workdir,
             model=model,
             files=files,
             timeout=timeout,
-            on_event=opencode.default_progress,
+            on_event=progress,
         )
         self._total_tokens += result.tokens
         return result

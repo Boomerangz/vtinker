@@ -71,12 +71,39 @@ class RunResult:
 # Callbacks for streaming progress
 # ---------------------------------------------------------------------------
 
-def default_progress(event: dict) -> None:
-    """Default progress callback: print tool use, text, thinking, and token counts to stderr."""
+class ProgressContext:
+    """Progress callback with phase/model/iteration context for log prefixes."""
+
+    def __init__(self, phase: str = "", model: str = "", iteration: int = 0):
+        self.phase = phase
+        self.model = model.split("/")[-1] if model else ""  # strip provider prefix
+        self.iteration = iteration
+
+    def _prefix(self) -> str:
+        from vtinker.colors import TIMESTAMP, DIM, RESET
+        parts = [_ts()]
+        if self.phase:
+            parts.append(self.phase)
+        if self.model:
+            parts.append(self.model)
+        if self.iteration:
+            parts.append(f"#{self.iteration}")
+        return f"{TIMESTAMP}{' '.join(parts)}{RESET} "
+
+    def __call__(self, event: dict) -> None:
+        _progress_with_context(event, self._prefix)
+
+
+def _progress_with_context(
+    event: dict,
+    prefix_fn: Callable[[], str] | None = None,
+) -> None:
+    """Progress callback with optional prefix function for context."""
     from vtinker.colors import (
         RESET, TOOL_CALL, TOOL_RESULT, TOOL_PATH, THINKING,
         TEXT, STEP_LINE, TOKEN_INFO, DIM, BOLD, BR_BLACK,
     )
+    pfx = prefix_fn() if prefix_fn else ""
 
     etype = event.get("type", "")
     part = event.get("part", {})
@@ -87,15 +114,14 @@ def default_progress(event: dict) -> None:
         status = state.get("status", "")
         tool = part.get("tool", "?")
 
-        # Show result for completed tools
         if status == "completed":
             output = state.get("output", "")
             if output and tool in ("bash", "read", "grep", "glob"):
                 lines = output.strip().split("\n")
                 preview = "\n".join(lines[:5])
                 if len(lines) > 5:
-                    preview += f"\n{TOOL_RESULT}    ... ({len(lines)} lines total){RESET}"
-                print(f"  {TOOL_RESULT}← {tool}: {preview}{RESET}", file=sys.stderr)
+                    preview += f"\n{pfx}{TOOL_RESULT}    ... ({len(lines)} lines total){RESET}"
+                print(f"{pfx}{TOOL_RESULT}← {tool}: {preview}{RESET}", file=sys.stderr)
             return
 
         if not tool_input:
@@ -105,14 +131,14 @@ def default_progress(event: dict) -> None:
             path = tool_input.get("filePath", tool_input.get("file_path", ""))
             content = tool_input.get("content", "")
             nlines = content.count("\n") + 1
-            print(f"  {TOOL_CALL}→ {BOLD}{tool}{RESET} {TOOL_PATH}{path}{RESET} {DIM}({nlines} lines){RESET}", file=sys.stderr)
+            print(f"{pfx}{TOOL_CALL}→ {BOLD}{tool}{RESET} {TOOL_PATH}{path}{RESET} {DIM}({nlines} lines){RESET}", file=sys.stderr)
             return
         elif tool == "edit":
             path = tool_input.get("filePath", tool_input.get("file_path", ""))
             old = tool_input.get("old_string", "")[:60].replace("\n", "↵")
             new = tool_input.get("new_string", "")[:60].replace("\n", "↵")
-            print(f"  {TOOL_CALL}→ {BOLD}{tool}{RESET} {TOOL_PATH}{path}{RESET}", file=sys.stderr)
-            print(f"    {DIM}«{old}» → «{new}»{RESET}", file=sys.stderr)
+            print(f"{pfx}{TOOL_CALL}→ {BOLD}{tool}{RESET} {TOOL_PATH}{path}{RESET}", file=sys.stderr)
+            print(f"{pfx}  {DIM}«{old}» → «{new}»{RESET}", file=sys.stderr)
             return
 
         preview = ""
@@ -121,12 +147,12 @@ def default_progress(event: dict) -> None:
                 val = str(tool_input[key])[:120].replace("\n", " ")
                 preview = f" {DIM}{val}{RESET}"
                 break
-        print(f"  {TOOL_CALL}→ {BOLD}{tool}{RESET}{preview}", file=sys.stderr)
+        print(f"{pfx}{TOOL_CALL}→ {BOLD}{tool}{RESET}{preview}", file=sys.stderr)
 
     elif etype == "text":
         text = part.get("text", "")
         if text:
-            print(f"{TEXT}{text}{RESET}", end="", file=sys.stderr)
+            print(f"{pfx}{TEXT}{text}{RESET}", end="", file=sys.stderr)
 
     elif etype in ("thinking", "reasoning"):
         text = part.get("text", part.get("thinking", ""))
@@ -134,14 +160,14 @@ def default_progress(event: dict) -> None:
             lines = text.strip().split("\n")
             if len(lines) <= 3:
                 for line in lines:
-                    print(f"  {THINKING}💭 {line}{RESET}", file=sys.stderr)
+                    print(f"{pfx}{THINKING}💭 {line}{RESET}", file=sys.stderr)
             else:
-                print(f"  {THINKING}💭 {lines[0]}{RESET}", file=sys.stderr)
-                print(f"  {THINKING}   ... ({len(lines)} lines){RESET}", file=sys.stderr)
-                print(f"  {THINKING}💭 {lines[-1]}{RESET}", file=sys.stderr)
+                print(f"{pfx}{THINKING}💭 {lines[0]}{RESET}", file=sys.stderr)
+                print(f"{pfx}{THINKING}   ... ({len(lines)} lines){RESET}", file=sys.stderr)
+                print(f"{pfx}{THINKING}💭 {lines[-1]}{RESET}", file=sys.stderr)
 
     elif etype == "step_start":
-        print(f"  {STEP_LINE}─────────────────────────────{RESET}", file=sys.stderr)
+        print(f"{pfx}{STEP_LINE}─────────────────────────────{RESET}", file=sys.stderr)
 
     elif etype == "step_finish":
         tokens = part.get("tokens", {})
@@ -156,7 +182,12 @@ def default_progress(event: dict) -> None:
         if cost:
             parts.append(f"${cost:.4f}")
         if parts:
-            print(f"\n  {TOKEN_INFO}── {' · '.join(parts)} ──{RESET}", file=sys.stderr)
+            print(f"\n{pfx}{TOKEN_INFO}── {' · '.join(parts)} ──{RESET}", file=sys.stderr)
+
+
+def default_progress(event: dict) -> None:
+    """Default progress callback without context (backward compat)."""
+    _progress_with_context(event)
 
 
 def verbose_progress(event: dict) -> None:
