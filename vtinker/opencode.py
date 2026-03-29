@@ -1,14 +1,29 @@
 """Thin wrapper around the opencode CLI."""
 from __future__ import annotations
 
+import datetime
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+_DEBUG = os.environ.get("VTINKER_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _ts() -> str:
+    return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+def _dbg(msg: str) -> None:
+    if _DEBUG:
+        from vtinker.colors import DEBUG, RESET
+        print(f"  {DEBUG}{_ts()} opencode: {msg}{RESET}", file=sys.stderr)
 
 
 @dataclass
@@ -57,34 +72,91 @@ class RunResult:
 # ---------------------------------------------------------------------------
 
 def default_progress(event: dict) -> None:
-    """Default progress callback: print tool use, text, and token counts to stderr."""
+    """Default progress callback: print tool use, text, thinking, and token counts to stderr."""
+    from vtinker.colors import (
+        RESET, TOOL_CALL, TOOL_RESULT, TOOL_PATH, THINKING,
+        TEXT, STEP_LINE, TOKEN_INFO, DIM, BOLD, BR_BLACK,
+    )
+
     etype = event.get("type", "")
     part = event.get("part", {})
 
     if etype == "tool_use":
         state = part.get("state", {})
         tool_input = state.get("input", {})
-        if not tool_input or state.get("status") == "completed":
-            return
+        status = state.get("status", "")
         tool = part.get("tool", "?")
+
+        # Show result for completed tools
+        if status == "completed":
+            output = state.get("output", "")
+            if output and tool in ("bash", "read", "grep", "glob"):
+                lines = output.strip().split("\n")
+                preview = "\n".join(lines[:5])
+                if len(lines) > 5:
+                    preview += f"\n{TOOL_RESULT}    ... ({len(lines)} lines total){RESET}"
+                print(f"  {TOOL_RESULT}← {tool}: {preview}{RESET}", file=sys.stderr)
+            return
+
+        if not tool_input:
+            return
+
+        if tool == "write":
+            path = tool_input.get("filePath", tool_input.get("file_path", ""))
+            content = tool_input.get("content", "")
+            nlines = content.count("\n") + 1
+            print(f"  {TOOL_CALL}→ {BOLD}{tool}{RESET} {TOOL_PATH}{path}{RESET} {DIM}({nlines} lines){RESET}", file=sys.stderr)
+            return
+        elif tool == "edit":
+            path = tool_input.get("filePath", tool_input.get("file_path", ""))
+            old = tool_input.get("old_string", "")[:60].replace("\n", "↵")
+            new = tool_input.get("new_string", "")[:60].replace("\n", "↵")
+            print(f"  {TOOL_CALL}→ {BOLD}{tool}{RESET} {TOOL_PATH}{path}{RESET}", file=sys.stderr)
+            print(f"    {DIM}«{old}» → «{new}»{RESET}", file=sys.stderr)
+            return
+
         preview = ""
         for key in ("command", "filePath", "file_path", "pattern", "content"):
             if key in tool_input:
-                val = str(tool_input[key])[:80].replace("\n", " ")
-                preview = f" {val}"
+                val = str(tool_input[key])[:120].replace("\n", " ")
+                preview = f" {DIM}{val}{RESET}"
                 break
-        print(f"  -> {tool}{preview}", file=sys.stderr)
+        print(f"  {TOOL_CALL}→ {BOLD}{tool}{RESET}{preview}", file=sys.stderr)
 
     elif etype == "text":
         text = part.get("text", "")
         if text:
-            print(text, end="", file=sys.stderr)
+            print(f"{TEXT}{text}{RESET}", end="", file=sys.stderr)
+
+    elif etype in ("thinking", "reasoning"):
+        text = part.get("text", part.get("thinking", ""))
+        if text:
+            lines = text.strip().split("\n")
+            if len(lines) <= 3:
+                for line in lines:
+                    print(f"  {THINKING}💭 {line}{RESET}", file=sys.stderr)
+            else:
+                print(f"  {THINKING}💭 {lines[0]}{RESET}", file=sys.stderr)
+                print(f"  {THINKING}   ... ({len(lines)} lines){RESET}", file=sys.stderr)
+                print(f"  {THINKING}💭 {lines[-1]}{RESET}", file=sys.stderr)
+
+    elif etype == "step_start":
+        print(f"  {STEP_LINE}─────────────────────────────{RESET}", file=sys.stderr)
 
     elif etype == "step_finish":
         tokens = part.get("tokens", {})
         total = tokens.get("total", 0)
+        reasoning = tokens.get("reasoning", 0)
+        cost = part.get("cost", 0)
+        parts = []
         if total:
-            print(f"\n  ({total} tokens)", file=sys.stderr)
+            parts.append(f"{total:,} tok")
+        if reasoning:
+            parts.append(f"{reasoning:,} reason")
+        if cost:
+            parts.append(f"${cost:.4f}")
+        if parts:
+            print(f"\n  {TOKEN_INFO}── {' · '.join(parts)} ──{RESET}", file=sys.stderr)
 
 
 def verbose_progress(event: dict) -> None:
@@ -164,7 +236,7 @@ def run(
             cmd += ["Execute the task described in the attached file.", "-f", prompt_file]
         else:
             cmd.append(prompt)
-        cmd += ["--dir", str(workdir), "--format", "json", "--title", "vtinker"]
+        cmd += ["--dir", str(workdir), "--format", "json", "--thinking", "--title", "vtinker"]
         if model:
             cmd += ["--model", model]
         if agent:
@@ -174,6 +246,10 @@ def run(
         if files:
             for fpath in files:
                 cmd += ["-f", str(fpath)]
+
+        _dbg(f"CMD: {' '.join(cmd)}")
+        _dbg(f"CWD: (inherited)  PROXY: HTTPS_PROXY={os.environ.get('HTTPS_PROXY', '<unset>')} "
+             f"HTTP_PROXY={os.environ.get('HTTP_PROXY', '<unset>')}")
 
         # Stream stdout line-by-line for real-time progress
         proc = subprocess.Popen(
@@ -187,28 +263,50 @@ def run(
 
         def _read_stderr():
             # Drain stderr to prevent blocking
-            for _ in proc.stderr:
-                pass
+            for line in proc.stderr:
+                _dbg(f"STDERR: {line.rstrip()}")
 
         stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
         stderr_thread.start()
+
+        _dbg(f"PID: {proc.pid} — waiting for stdout events...")
+        lines_read = 0
+        last_event_time = time.monotonic()
+        watchdog_stop = threading.Event()
+
+        def _watchdog():
+            """Print heartbeat every 30s of silence so user knows it's alive."""
+            while not watchdog_stop.wait(30):
+                silence = time.monotonic() - last_event_time
+                if silence >= 29:
+                    _dbg(f"no events for {int(silence)}s (events so far: {lines_read}, pid: {proc.pid})")
+
+        if _DEBUG:
+            wd_thread = threading.Thread(target=_watchdog, daemon=True)
+            wd_thread.start()
 
         # Read stdout line by line
         for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
+            lines_read += 1
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                _dbg(f"JSON-PARSE-FAIL: {line[:200]}")
                 continue
 
             events.append(event)
+            last_event_time = time.monotonic()
+            etype = event.get("type", "?")
+            _dbg(f"EVENT #{lines_read}: type={etype}")
 
             # Check for error events (budget exhausted, model not found, etc.)
             if event.get("type") == "error":
                 err = event.get("error", {})
                 err_msg = err.get("data", {}).get("message", "") or err.get("name", "unknown error")
+                _dbg(f"ERROR EVENT: {err_msg}")
                 _check_budget_error(err_msg)
 
             if not session_id and event.get("sessionID"):
@@ -239,7 +337,10 @@ def run(
                 except Exception:
                     pass  # never crash on progress callback
 
+        watchdog_stop.set()
+        _dbg(f"stdout EOF — {lines_read} events read, waiting for process...")
         proc.wait(timeout=timeout)
+        _dbg(f"process exited: code={proc.returncode}")
         stderr_thread.join(timeout=5)
 
     except subprocess.TimeoutExpired:

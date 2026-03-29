@@ -68,10 +68,7 @@ def main() -> None:
         if args.command == "start":
             orch = Orchestrator(config)
             epic_def = _resolve_headless_epic(args)
-            if epic_def:
-                orch.start_headless(epic_def)
-            else:
-                orch.start()
+            orch.start(epic_def=epic_def)
 
         elif args.command == "resume":
             epic_id = args.epic_id
@@ -84,7 +81,7 @@ def main() -> None:
                     config.workdir = saved_workdir
                 if not config.checks and state.checks:
                     config.checks = [Check(c["name"], c["command"]) for c in state.checks]
-                print(f"Resuming epic {epic_id} (from state file)", file=sys.stderr)
+                print(f"Resuming epic {epic_id} (phase={state.phase}, from state file)", file=sys.stderr)
 
             if not epic_id:
                 print("Error: no epic_id provided and no .vtinker/state.json found", file=sys.stderr)
@@ -93,6 +90,8 @@ def main() -> None:
             orch = Orchestrator(config)
             if state and state.branch_base:
                 orch.branch_base = state.branch_base
+            if state:
+                orch.epic_id = state.epic_id
             orch.resume(epic_id)
 
     except BudgetExhaustedError as e:

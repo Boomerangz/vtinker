@@ -2,14 +2,15 @@
 import tempfile
 from pathlib import Path
 
-from vtinker.prompts import load_prompts, DIALOG, PLAN, EXECUTE, REVIEW, FIX, FINAL_REVIEW, REFINE
+from vtinker.prompts import load_prompts, DIALOG, RESEARCH, PLAN, EXECUTE, REVIEW, FIX, FINAL_REVIEW, REFINE
 
 
 class TestLoadPrompts:
     def test_defaults(self):
         prompts = load_prompts()
-        assert len(prompts) == 9
+        assert len(prompts) == 10
         assert prompts["dialog"] == DIALOG
+        assert prompts["research"] == RESEARCH
         assert prompts["plan"] == PLAN
         assert prompts["execute"] == EXECUTE
         assert prompts["review"] == REVIEW
@@ -50,4 +51,4 @@ class TestLoadPrompts:
         assert "{git_diff}" in REVIEW
         assert "{check_results}" in REVIEW
         assert "{review_feedback}" in FIX
-        assert "{full_diff}" in FINAL_REVIEW
+        assert "{checks_description}" in FINAL_REVIEW

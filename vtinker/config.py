@@ -25,6 +25,7 @@ class Config:
     opencode_agent: str | None = None
     prompts_dir: Path | None = None
     # Per-phase model overrides (fall back to opencode_model if not set)
+    model_research: str | None = None
     model_plan: str | None = None
     model_execute: str | None = None
     model_review: str | None = None
@@ -71,6 +72,7 @@ def load_config(path: Path | None = None) -> Config:
         opencode_model=oc.get("model"),
         opencode_agent=oc.get("agent"),
         prompts_dir=Path(prompts_dir) if prompts_dir else None,
+        model_research=models.get("research"),
         model_plan=models.get("plan"),
         model_execute=models.get("execute"),
         model_review=models.get("review"),
@@ -89,10 +91,15 @@ def _vtinker_dir(workdir: Path) -> Path:
     return d
 
 
+# Ordered phases — resume starts from the saved phase
+PHASES = ("init", "epic", "prepare", "research", "plan", "execute", "final", "done")
+
+
 @dataclass
 class State:
     epic_id: str
     workdir: str
+    phase: str = "init"
     branch_base: str | None = None
     checks: list[dict] | None = None
 
@@ -103,6 +110,7 @@ def save_state(state: State, workdir: Path) -> None:
     data = {
         "epic_id": state.epic_id,
         "workdir": state.workdir,
+        "phase": state.phase,
         "branch_base": state.branch_base,
     }
     if state.checks:
@@ -121,6 +129,7 @@ def load_state(workdir: Path) -> State | None:
     return State(
         epic_id=data["epic_id"],
         workdir=data["workdir"],
+        phase=data.get("phase", "execute"),  # backward compat: old states had no phase
         branch_base=data.get("branch_base"),
         checks=data.get("checks"),
     )

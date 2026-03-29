@@ -45,6 +45,41 @@ checks:
 ```
 """
 
+RESEARCH = """\
+You are a research assistant preparing reference materials for a coding project.
+
+EPIC: {epic_title}
+
+DESCRIPTION:
+{epic_description}
+
+Your job: find specific documentation URLs that a developer will need to implement this project.
+
+Steps:
+1. Identify the key technical concepts, protocols, APIs, and libraries involved
+2. Use web search to find the OFFICIAL documentation for each
+3. Find the SPECIFIC pages/sections — not homepages, but the exact reference needed
+4. Prefer: official docs > specs > tutorials with code > blog posts
+
+Output a ```refs block listing each URL with a short label:
+
+```refs
+- <label>: <url>
+- <label>: <url>
+```
+
+Focus on URLs that contain:
+- API references with function signatures and examples
+- Protocol specs with message formats and data structures
+- Library docs with usage patterns
+- Configuration references
+
+Do NOT include:
+- Generic homepages or marketing pages
+- Outdated documentation
+- URLs that require authentication
+"""
+
 PLAN = """\
 You are a project planner. Break down an epic into sequential tasks.
 
@@ -55,6 +90,9 @@ DESCRIPTION:
 
 ACCEPTANCE CRITERIA:
 {acceptance}
+
+REFERENCE DOCUMENTATION:
+{research_refs}
 
 WORKING DIRECTORY: {workdir}
 
@@ -67,6 +105,7 @@ Rules:
 - If a task is clearly simple (single file, trivial change), add "atomic: true" to its fields
 - CRITICAL: dependencies must be correct. If task B imports or uses files/modules created by task A, then B MUST list A in its depends field. Double-check every depends value before outputting.
 - Test tasks must depend on the implementation tasks they test
+- If reference docs are available, attach relevant URLs to each task in the "refs:" field. The executor will use webfetch to read them. Only attach refs that are directly relevant to that specific task.
 
 Output each task inside a fenced block (the ``` markers are required):
 
@@ -80,6 +119,9 @@ description:
 
 acceptance:
 <multi-line acceptance criteria>
+
+refs:
+- <url relevant to this task>
 ```
 
 Output as many ```task blocks as needed, one after another.
@@ -129,6 +171,9 @@ DESCRIPTION:
 ACCEPTANCE CRITERIA:
 {acceptance}
 
+REFERENCE DOCS:
+{task_refs}
+
 EPIC CONTEXT:
 {epic_description}
 
@@ -145,6 +190,7 @@ Rules:
 - Run the check commands listed above before finishing
 - If a check fails, fix the issue before stopping
 - Do not touch files unrelated to this task
+- If reference docs are listed above, use webfetch to read them BEFORE writing code. They contain the exact specs and API details you need.
 """
 
 REVIEW = """\
@@ -210,7 +256,7 @@ Rules:
 """
 
 FINAL_REVIEW = """\
-Final review of ALL work done for this epic.
+Final review of ALL work done for this epic. You MUST verify thoroughly before approving.
 
 EPIC: {epic_title}
 
@@ -220,20 +266,22 @@ DESCRIPTION:
 ACCEPTANCE CRITERIA:
 {acceptance}
 
-FULL GIT DIFF:
-{full_diff}
-
-CHECK RESULTS:
-{check_results}
-
 TASKS COMPLETED:
 {task_summary}
 
-Review:
-1. Are ALL epic acceptance criteria met?
-2. Is there any leftover or incomplete work?
-3. Are there new issues introduced?
-4. Is the code consistent across all changes?
+PREVIOUS CHECK RESULTS:
+{check_results}
+
+IMPORTANT: Do NOT trust the diff or check results above blindly. You must verify yourself:
+
+Step 1: Run the check commands yourself:
+{checks_description}
+
+Step 2: Read the key source files to verify they are complete (no stubs, no TODOs, no placeholders)
+
+Step 3: Check each acceptance criterion one by one — is it actually implemented?
+
+Step 4: Only after verifying, give your verdict.
 
 If everything is complete, respond with:
 VERDICT: COMPLETE
@@ -356,6 +404,7 @@ Output as many ```task blocks as needed, one after another.
 
 _TEMPLATES = {
     "dialog": "DIALOG",
+    "research": "RESEARCH",
     "plan": "PLAN",
     "refine": "REFINE",
     "execute": "EXECUTE",

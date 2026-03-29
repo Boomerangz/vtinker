@@ -14,7 +14,7 @@ from vtinker.config import Check
 # Only these get treated as section headers; anything else is content.
 _KNOWN_FIELDS = frozenset({
     "title", "description", "acceptance", "depends",
-    "branch", "worktree", "checks", "atomic",
+    "branch", "worktree", "checks", "atomic", "refs",
 })
 
 
@@ -35,6 +35,7 @@ class TaskDef:
     acceptance: str = ""
     depends: list[int] = field(default_factory=list)
     atomic: bool = False
+    refs: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +94,31 @@ def extract_tasks(text: str) -> list[TaskDef]:
         atomic_str = sections.get("atomic", "").strip()
         task.atomic = atomic_str.lower() == "true"
 
+        refs_text = sections.get("refs", "").strip()
+        if refs_text:
+            for line in refs_text.splitlines():
+                url = line.strip().lstrip("- ")
+                if url.startswith("http://") or url.startswith("https://"):
+                    task.refs.append(url)
+
         if task.title:
             tasks.append(task)
     return tasks
+
+
+def extract_refs(text: str) -> list[str]:
+    """Extract URLs from a ```refs fenced block."""
+    block = _extract_fenced_block(text, "refs")
+    if not block:
+        # Fallback: find any URLs in the text
+        return re.findall(r"https?://[^\s)>\]\"']+", text)
+    urls = []
+    for line in block.splitlines():
+        # "- label: url" or "- url"
+        match = re.search(r"https?://[^\s)>\]\"']+", line)
+        if match:
+            urls.append(match.group(0))
+    return urls
 
 
 def extract_verdict(text: str) -> tuple[str, str]:

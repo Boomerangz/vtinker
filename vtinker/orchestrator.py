@@ -9,11 +9,11 @@ import sys
 from pathlib import Path
 
 from vtinker import beads, checks, opencode
-from vtinker.config import VTINKER_DIR, Config, State, save_state
+from vtinker.config import PHASES, VTINKER_DIR, Config, State, save_state
 from vtinker.doom import DoomDetector
 from vtinker.gitignore import ensure_gitignore
 from vtinker.opencode import BudgetExhaustedError, TokenUsage
-from vtinker.parse import EpicDef, extract_epic, extract_tasks, extract_verdict
+from vtinker.parse import EpicDef, extract_epic, extract_refs, extract_tasks, extract_verdict
 from vtinker.prompts import load_prompts
 
 
@@ -33,62 +33,174 @@ class Orchestrator:
         self._total_tokens = TokenUsage()
         self._replan_count = 0
         self._max_replans = 3
+        self._research_refs: list[str] = []
 
     # ------------------------------------------------------------------
     # Entry points
     # ------------------------------------------------------------------
 
-    def start(self) -> None:
-        beads.set_workdir(self.workdir)
-        beads.init(self.workdir)
-        ensure_gitignore(self.workdir)
-        self._init_log()
-        self._dialog()
-        self._save_state()
-        self._prepare()
-        self._save_state()
-        self._plan()
-        self._execute_loop()
-        self._final_review()
+    def start(self, epic_def: EpicDef | None = None) -> None:
+        """Start fresh. If epic_def is provided, skip DIALOG."""
+        self._epic_def = epic_def
+        self._bootstrap()
+        self._run_from("init")
 
+    def resume(self, epic_id: str | None = None) -> None:
+        """Resume from saved state, or from execute if only epic_id given."""
+        if epic_id:
+            self.epic_id = epic_id
+        self._bootstrap()
+        if not self.epic_id:
+            raise VtinkerError("Cannot resume: no epic_id in state or argument")
+
+        # Determine start phase from saved state
+        state = self._load_current_state()
+        phase = state.phase if state else "execute"
+        _log("RESUME", f"resuming from phase={phase}, epic={self.epic_id}")
+        self._run_from(phase)
+
+    # Keep old name for backward compat
     def start_headless(self, epic_def: EpicDef) -> None:
-        """Start without interactive DIALOG — epic already defined."""
+        self.start(epic_def=epic_def)
+
+    # ------------------------------------------------------------------
+    # State machine
+    # ------------------------------------------------------------------
+
+    _epic_def: EpicDef | None = None
+
+    def _bootstrap(self) -> None:
+        """Common init: beads, gitignore, log."""
         beads.set_workdir(self.workdir)
         beads.init(self.workdir)
         ensure_gitignore(self.workdir)
         self._init_log()
-        self._create_epic_from_def(epic_def)
-        self._save_state()
-        self._prepare()
-        self._save_state()
-        self._plan()
-        self._execute_loop()
-        self._final_review()
 
-    def resume(self, epic_id: str) -> None:
-        self.epic_id = epic_id
-        beads.set_workdir(self.workdir)
-        ensure_gitignore(self.workdir)
-        self._init_log()
-        self._record_branch_base()
+    def _run_from(self, start_phase: str) -> None:
+        """Execute phases sequentially starting from start_phase."""
+        phase_handlers = {
+            "init":     self._phase_init,
+            "epic":     self._phase_epic,
+            "prepare":  self._phase_prepare,
+            "research": self._phase_research,
+            "plan":     self._phase_plan,
+            "execute":  self._phase_execute,
+            "final":    self._phase_final,
+        }
+
+        started = False
+        for phase in PHASES:
+            if phase == "done":
+                break
+            if phase == start_phase:
+                started = True
+            if not started:
+                continue
+
+            handler = phase_handlers.get(phase)
+            if handler:
+                _log("PHASE", f"entering {phase}")
+                handler()
+                self._save_state(phase)
+
+    # ------------------------------------------------------------------
+    # Phase implementations
+    # ------------------------------------------------------------------
+
+    def _phase_init(self) -> None:
+        """Idempotent init — nothing to do if already bootstrapped."""
+        pass
+
+    def _phase_epic(self) -> None:
+        """Create epic if not already present."""
+        if self.epic_id:
+            _log("EPIC", f"already exists: {self.epic_id}, skipping")
+            return
+        if self._epic_def:
+            self._create_epic_from_def(self._epic_def)
+        else:
+            self._dialog()
+
+    def _phase_prepare(self) -> None:
+        """Git branch/worktree setup — idempotent."""
+        self._prepare()
+
+    def _phase_research(self) -> None:
+        """Find reference docs for the epic. Skip if no research model configured."""
+        if not self.config.model_research:
+            _log("RESEARCH", "no research model configured, skipping")
+            return
+
+        # Skip if we already have refs cached
+        refs_file = self.workdir / VTINKER_DIR / "research_refs.json"
+        if refs_file.exists():
+            self._research_refs = json.loads(refs_file.read_text())
+            _log("RESEARCH", f"loaded {len(self._research_refs)} cached refs")
+            return
+
+        epic = beads.show(self.epic_id)
+        result = self._opencode(
+            self._prompts["research"].format(
+                epic_title=epic.get("title", ""),
+                epic_description=epic.get("description", ""),
+            ),
+            phase="research",
+        )
+
+        self._research_refs = extract_refs(result.text)
+        _log("RESEARCH", f"found {len(self._research_refs)} refs")
+        for ref in self._research_refs:
+            _log("RESEARCH", f"  {ref}")
+
+        # Cache refs to disk
+        refs_file.write_text(json.dumps(self._research_refs, indent=2))
+        self._audit("research", {"ref_count": len(self._research_refs)})
+
+    def _phase_plan(self) -> None:
+        """Create tasks — skip if tasks already exist under this epic."""
+        existing = beads.children(self.epic_id)
+        if existing:
+            _log("PLAN", f"epic already has {len(existing)} tasks, skipping plan")
+            return
+        # Load cached refs if research ran in a previous session
+        if not self._research_refs:
+            refs_file = self.workdir / VTINKER_DIR / "research_refs.json"
+            if refs_file.exists():
+                self._research_refs = json.loads(refs_file.read_text())
+        self._plan()
+
+    def _phase_execute(self) -> None:
         self._execute_loop()
+
+    def _phase_final(self) -> None:
         self._final_review()
 
     # ------------------------------------------------------------------
     # State persistence
     # ------------------------------------------------------------------
 
-    def _save_state(self) -> None:
+    def _save_state(self, phase: str | None = None) -> None:
         if not self.epic_id:
             return
+        # Advance to next phase for resume
+        next_phase = phase or "init"
+        if phase and phase != "done":
+            idx = PHASES.index(phase)
+            if idx + 1 < len(PHASES):
+                next_phase = PHASES[idx + 1]
         state = State(
             epic_id=self.epic_id,
             workdir=str(self.workdir),
+            phase=next_phase,
             branch_base=self.branch_base,
             checks=[{"name": c.name, "command": c.command} for c in self.config.checks],
         )
         save_state(state, self.workdir)
-        self._audit("state_saved", {"epic_id": self.epic_id})
+        self._audit("state_saved", {"epic_id": self.epic_id, "phase": next_phase})
+
+    def _load_current_state(self) -> State | None:
+        from vtinker.config import load_state
+        return load_state(self.workdir)
 
     # ------------------------------------------------------------------
     # Audit log
@@ -207,6 +319,19 @@ class Orchestrator:
         )
         if result.returncode == 0:
             self.branch_base = result.stdout.strip()
+        else:
+            # Empty repo — create an initial commit so we have a base for diffs
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "vtinker: initial commit"],
+                cwd=self.workdir, capture_output=True, text=True,
+            )
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.workdir, capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                self.branch_base = result.stdout.strip()
+                _log("PREPARE", "created initial empty commit as branch base")
 
     # ------------------------------------------------------------------
     # Phase 3: PLAN — break epic into tasks
@@ -216,11 +341,13 @@ class Orchestrator:
         _log("PLAN", "breaking epic into tasks")
         epic = beads.show(self.epic_id)
 
+        refs_text = "\n".join(f"- {r}" for r in self._research_refs) if self._research_refs else "None"
         prompt = self._prompts["plan"].format(
             epic_title=epic.get("title", ""),
             epic_description=epic.get("description", ""),
             acceptance=epic.get("acceptance_criteria", epic.get("acceptance", "")),
             workdir=str(self.workdir),
+            research_refs=refs_text,
         )
 
         # Generate initial plan (up to 3 format retries)
@@ -308,8 +435,13 @@ class Orchestrator:
         id_map: dict[int, str] = {}
         for i, task in enumerate(tasks, 1):
             deps = [id_map[d] for d in task.depends if d in id_map] or None
-            # Store atomic flag in metadata via notes
-            notes = "atomic: true" if task.atomic else None
+            # Store atomic flag and refs in notes
+            notes_parts = []
+            if task.atomic:
+                notes_parts.append("atomic: true")
+            if task.refs:
+                notes_parts.append("refs: " + ", ".join(task.refs))
+            notes = "\n".join(notes_parts) or None
             bead_id = beads.create_task(
                 parent_id=parent_id,
                 title=task.title,
@@ -320,7 +452,8 @@ class Orchestrator:
             if notes:
                 beads.update(bead_id, notes=notes)
             id_map[i] = bead_id
-            _log("PLAN", f"  {bead_id}: {task.title}{'  [atomic]' if task.atomic else ''}")
+            refs_info = f"  [{len(task.refs)} refs]" if task.refs else ""
+            _log("PLAN", f"  {bead_id}: {task.title}{'  [atomic]' if task.atomic else ''}{refs_info}")
         return id_map
 
     # ------------------------------------------------------------------
@@ -461,11 +594,16 @@ class Orchestrator:
         if "test" in title_lower and not context_files:
             context_files = _find_test_sources(task, self.workdir)
 
+        # Extract refs from task notes (stored as "refs: url1, url2, ...")
+        task_refs = _get_task_refs(task)
+        refs_text = "\n".join(f"- {r}" for r in task_refs) if task_refs else "None"
+
         self._opencode(
             self._prompts["execute"].format(
                 task_title=task.get("title", ""),
                 task_description=task.get("description", ""),
                 acceptance=_get_acceptance(task),
+                task_refs=refs_text,
                 epic_description=epic.get("description", ""),
                 completed_summary=completed_summary,
                 checks_description=checks_desc,
@@ -634,21 +772,23 @@ class Orchestrator:
         _log("FINAL", "running final review")
         epic = beads.show(self.epic_id)
         all_children = beads.children(self.epic_id)
-        full_diff = _git_output(self.workdir, "diff", self.branch_base, "HEAD")
         check_results = checks.run_checks(self.config.checks, self.workdir)
         task_summary = "\n".join(
             f"- [{c.get('status', '?')}] {c.get('title', c.get('id', '?'))}"
             for c in all_children
         )
+        checks_desc = "\n".join(
+            f"- {c.name}: {c.command}" for c in self.config.checks
+        ) or "None configured"
 
         result = self._opencode(
             self._prompts["final_review"].format(
                 epic_title=epic.get("title", ""),
                 epic_description=epic.get("description", ""),
                 acceptance=epic.get("acceptance_criteria", epic.get("acceptance", "")),
-                full_diff=_truncate(full_diff, 15000),
                 check_results=checks.format_results(check_results),
                 task_summary=task_summary,
+                checks_description=checks_desc,
             ),
             phase="final",
         )
@@ -690,6 +830,7 @@ class Orchestrator:
     def _model_for(self, phase: str) -> str | None:
         """Get the model for a specific phase, falling back to default."""
         overrides = {
+            "research": self.config.model_research,
             "plan": self.config.model_plan,
             "refine": self.config.model_plan,  # refine uses plan model
             "execute": self.config.model_execute,
@@ -726,8 +867,22 @@ class Orchestrator:
 # ------------------------------------------------------------------
 
 def _log(phase: str, msg: str) -> None:
+    from vtinker.colors import (
+        RESET, PHASE, TIMESTAMP, SUCCESS, ERROR, WARN, DIM, BOLD,
+    )
     ts = datetime.datetime.now().strftime("%H:%M:%S")
-    print(f"[{ts} vtinker:{phase}] {msg}", file=sys.stderr)
+
+    # Color the message based on keywords
+    if any(w in msg.lower() for w in ("complete", "done", "pass", "created", "skipping")):
+        mc = SUCCESS
+    elif any(w in msg.lower() for w in ("fail", "error", "doom", "max retries")):
+        mc = ERROR
+    elif any(w in msg.lower() for w in ("blocked", "retry", "warn")):
+        mc = WARN
+    else:
+        mc = RESET
+
+    print(f"{TIMESTAMP}{ts}{RESET} {PHASE}▸ {phase}{RESET} {mc}{msg}{RESET}", file=sys.stderr)
 
 
 def _git(workdir: Path, *args: str) -> None:
@@ -771,6 +926,21 @@ def _read_multiline() -> list[str]:
 def _get_acceptance(bead: dict) -> str:
     """Get acceptance criteria from a bead dict, handling field name variants."""
     return bead.get("acceptance_criteria", bead.get("acceptance", bead.get("notes", "")))
+
+
+def _get_task_refs(task: dict) -> list[str]:
+    """Extract reference URLs from task notes."""
+    notes = task.get("notes", "")
+    refs = []
+    for line in notes.split("\n"):
+        line = line.strip()
+        if line.startswith("refs:"):
+            urls = line[len("refs:"):].strip()
+            for url in re.split(r"[,\s]+", urls):
+                url = url.strip()
+                if url.startswith("http://") or url.startswith("https://"):
+                    refs.append(url)
+    return refs
 
 
 def _find_test_sources(task: dict, workdir: Path) -> list[Path]:

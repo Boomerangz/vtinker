@@ -1,10 +1,26 @@
 """Thin wrapper around the bd (Beads) CLI."""
 from __future__ import annotations
 
+import datetime
 import json
+import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
+
+_DEBUG = os.environ.get("VTINKER_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _ts() -> str:
+    return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+def _dbg(msg: str) -> None:
+    if _DEBUG:
+        from vtinker.colors import DEBUG, RESET
+        print(f"  {DEBUG}{_ts()} beads: {msg}{RESET}", file=sys.stderr)
 
 
 class BeadsError(RuntimeError):
@@ -21,14 +37,24 @@ _workdir: Path | None = None
 def set_workdir(path: Path) -> None:
     global _workdir
     _workdir = path
+    _dbg(f"workdir={path}")
 
 
-def _run(*args: str, json_output: bool = True) -> Any:
+def _run(*args: str, json_output: bool = True, timeout: int = 30) -> Any:
     cmd = ["bd", *args]
     if json_output:
         cmd.append("--json")
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=_workdir)
+    _dbg(f"RUN: {' '.join(cmd)}  cwd={_workdir}")
+    t0 = time.monotonic()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=_workdir, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _dbg(f"TIMEOUT after {timeout}s: bd {' '.join(args)}")
+        raise BeadsError(f"bd {' '.join(args)}: timed out after {timeout}s")
+    elapsed = time.monotonic() - t0
+    _dbg(f"DONE in {elapsed:.1f}s: exit={result.returncode}")
     if result.returncode != 0:
+        _dbg(f"STDERR: {result.stderr.strip()[:200]}")
         raise BeadsError(f"bd {' '.join(args)}: {result.stderr.strip()}")
     if not json_output or not result.stdout.strip():
         return result.stdout.strip()
@@ -44,7 +70,17 @@ def _run(*args: str, json_output: bool = True) -> Any:
 def init(workdir: Path | None = None) -> None:
     """Initialize beads in the given directory if not already done."""
     wd = workdir or _workdir
-    subprocess.run(["bd", "init"], cwd=wd, capture_output=True, text=True)
+    _dbg(f"bd init  cwd={wd}")
+    t0 = time.monotonic()
+    try:
+        result = subprocess.run(["bd", "init"], cwd=wd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        _dbg("bd init TIMEOUT after 30s")
+        return
+    elapsed = time.monotonic() - t0
+    _dbg(f"bd init done in {elapsed:.1f}s: exit={result.returncode}")
+    if result.returncode != 0:
+        _dbg(f"bd init stderr: {result.stderr.strip()[:200]}")
 
 
 def create_epic(title: str, description: str = "") -> str:

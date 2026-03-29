@@ -60,7 +60,7 @@ class TestDefaultProgress:
         }
         default_progress(event)
         captured = capsys.readouterr()
-        assert "5000" in captured.err
+        assert "5,000" in captured.err or "5000" in captured.err
 
     def test_unknown_event_no_crash(self):
         default_progress({"type": "unknown_type", "part": {}})
