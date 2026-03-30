@@ -879,9 +879,10 @@ class Orchestrator:
             )
 
         # Close all remaining open tasks (they're being replaced)
+        # Use force=True because tasks may have dependencies on each other
         for t in open_tasks:
             tid = t.get("id", "")
-            beads.close(tid, reason="Replaced by replan")
+            beads.close(tid, reason="Replaced by replan", force=True)
             _log("REPLAN", f"closed old task: {tid}")
 
         # Create new tasks under the epic

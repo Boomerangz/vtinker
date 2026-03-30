@@ -134,11 +134,13 @@ def show(bead_id: str) -> dict:
     return result
 
 
-def close(bead_id: str, reason: str = "") -> None:
+def close(bead_id: str, reason: str = "", force: bool = False) -> None:
     """Mark a bead as closed/done."""
     args = ["close", bead_id]
     if reason:
         args += ["-r", reason]
+    if force:
+        args.append("--force")
     _run(*args, json_output=False)
 
 
