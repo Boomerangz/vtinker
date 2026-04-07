@@ -7,13 +7,14 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from vtinker import beads, checks, opencode
 from vtinker.config import PHASES, VTINKER_DIR, Config, State, save_state
 from vtinker.doom import DoomDetector
 from vtinker.gitignore import ensure_gitignore
-from vtinker.opencode import BudgetExhaustedError, TokenUsage
+from vtinker.opencode import BudgetExhaustedError, NetworkTimeoutError, TokenUsage, is_network_timeout
 from vtinker.parse import EpicDef, extract_epic, extract_refs, extract_tasks, extract_verdict
 from vtinker.prompts import load_prompts
 
@@ -210,9 +211,11 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _init_log(self) -> None:
+        global _output_log_path
         dw_dir = self.workdir / VTINKER_DIR
         dw_dir.mkdir(exist_ok=True)
         self._log_file = dw_dir / "log.jsonl"
+        _output_log_path = dw_dir / "output.log"
 
     def _audit(self, event: str, data: dict | None = None) -> None:
         if not self._log_file:
@@ -410,6 +413,10 @@ class Orchestrator:
 
             improved_tasks = extract_tasks(result.text)
             if improved_tasks:
+                # Reject if the "improvement" drops more than 30% of tasks — likely a model error
+                if len(improved_tasks) < len(tasks) * 0.7:
+                    _log("PLAN", f"plan review: REJECTED — {len(tasks)} → {len(improved_tasks)} tasks (too few, keeping current)")
+                    break
                 _log("PLAN", f"plan review: IMPROVED — {len(tasks)} → {len(improved_tasks)} tasks")
                 tasks = improved_tasks
             else:
@@ -576,6 +583,7 @@ class Orchestrator:
 
         # REVIEW + FIX loop
         issues = ""
+        fix_produced_no_changes = False
         for attempt in range(self.config.max_retries):
             check_results = checks.run_checks(self.config.checks, self.workdir)
             verdict, issues = self._review(task, check_results, pre_execute_rev)
@@ -585,6 +593,18 @@ class Orchestrator:
                 _log("TASK", f"{self._progress_str()} DONE: {task_id}")
                 self._audit("task_done", {"task_id": task_id})
                 return
+
+            # If the previous fix changed nothing and review still says FAIL,
+            # the model is truly stuck — replan instead of retrying endlessly
+            if fix_produced_no_changes:
+                _log("TASK", f"fix produced no changes and review still FAIL — triggering replan")
+                self._audit("fix_no_changes", {"task_id": task_id, "attempt": attempt})
+                beads.update(task_id, status="blocked",
+                             notes=f"Fix produced no changes, review still failing:\n{issues}")
+                if self._replan_count < self._max_replans:
+                    self._replan(task, f"Fix produced no code changes but review still failing. Issues:\n{issues}")
+                    return
+                raise VtinkerError(f"Task {task_id} stuck: fix produces no changes, replans exhausted")
 
             self.doom.record(task_id, issues)
             if self.doom.is_looping():
@@ -598,16 +618,7 @@ class Orchestrator:
             self._fix(task, issues, check_results)
             self._ensure_committed(task, fix_attempt=attempt + 1)
             post_fix_rev = _git_rev(self.workdir)
-
-            if pre_fix_rev == post_fix_rev:
-                _log("TASK", f"fix produced no changes — model is stuck, triggering replan")
-                self._audit("fix_no_changes", {"task_id": task_id, "attempt": attempt + 1})
-                beads.update(task_id, status="blocked",
-                             notes=f"Fix produced no changes after {attempt + 1} attempts:\n{issues}")
-                if self._replan_count < self._max_replans:
-                    self._replan(task, f"Fix produced no code changes. Issues:\n{issues}")
-                    return
-                raise VtinkerError(f"Task {task_id} stuck: fix produces no changes, replans exhausted")
+            fix_produced_no_changes = (pre_fix_rev == post_fix_rev)
 
 
         _log("TASK", f"max retries reached for {task_id}")
@@ -956,8 +967,23 @@ class Orchestrator:
             phase="final",
         )
 
-        verdict, missing = extract_verdict(result.text)
+        # If model returned empty text, treat as INCOMPLETE
+        if not result.text.strip():
+            _log("FINAL", "final review returned empty response — treating as INCOMPLETE")
+            verdict = "INCOMPLETE"
+            missing = "Final review model returned no output."
+        else:
+            verdict, missing = extract_verdict(result.text)
+
         self._audit("final_review", {"verdict": verdict})
+
+        # Also treat blocked tasks as INCOMPLETE — they need attention
+        blocked = [c for c in all_children if c.get("status") == "blocked"]
+        if blocked and verdict != "INCOMPLETE":
+            blocked_titles = ", ".join(c.get("title", c.get("id")) for c in blocked)
+            _log("FINAL", f"blocked tasks remain: {blocked_titles} — treating as INCOMPLETE")
+            verdict = "INCOMPLETE"
+            missing = f"Blocked tasks need to be completed: {blocked_titles}"
 
         if verdict == "INCOMPLETE":
             _log("FINAL", f"final review found missing work, creating tasks...")
@@ -966,7 +992,6 @@ class Orchestrator:
                 self._create_tasks_from_defs(self.epic_id, new_tasks)
                 _log("FINAL", f"created {len(new_tasks)} new tasks, re-entering loop")
                 self._execute_loop()
-                # Recursive final review (with depth limit via max_iterations)
                 self._final_review(depth=depth + 1)
             else:
                 _log("FINAL", f"could not parse new tasks from:\n{missing}")
@@ -1021,29 +1046,107 @@ class Orchestrator:
         timeout: int | None = None,
         phase: str | None = None,
     ) -> opencode.RunResult:
-        """Run opencode with real-time progress streaming to stderr."""
+        """Run opencode with real-time progress streaming to stderr.
+
+        Detects network timeouts (exit=-9, no text, no events) and pauses
+        with exponential backoff until the network recovers, without counting
+        the attempt against retry limits.
+        """
         if timeout is None:
             timeout = self.config.opencode_timeout
         model = self._model_for(phase) if phase else self.config.opencode_model
-        progress = opencode.ProgressContext(
-            phase=phase or "",
-            model=model or "",
-            iteration=self._task_iteration,
-        )
-        result = opencode.run(
-            prompt, self.workdir,
-            model=model,
-            files=files,
-            timeout=timeout,
-            on_event=progress,
-        )
-        self._total_tokens += result.tokens
-        return result
+
+        total_waited = 0
+        backoff_idx = 0
+        delays = self.config.network_retry_delays
+        max_wait = self.config.max_network_wait
+
+        while True:
+            progress = opencode.ProgressContext(
+                phase=phase or "",
+                model=model or "",
+                iteration=self._task_iteration,
+            )
+            result = opencode.run(
+                prompt, self.workdir,
+                model=model,
+                files=files,
+                timeout=timeout,
+                on_event=progress,
+            )
+            self._total_tokens += result.tokens
+
+            # Check for network timeout
+            if is_network_timeout(result):
+                if total_waited >= max_wait:
+                    _log("NETWORK", f"max network wait ({max_wait}s) exceeded — treating as real failure")
+                    raise NetworkTimeoutError(
+                        f"Network unavailable for {total_waited}s (max {max_wait}s). "
+                        f"Last result: exit={result.exit_code}, events={len(result.raw_events)}"
+                    )
+
+                delay = delays[min(backoff_idx, len(delays) - 1)]
+                _log("NETWORK", f"⏸ Network timeout (attempt not counted), waiting {delay}s...")
+                self._audit("network_timeout", {
+                    "phase": phase, "delay": delay,
+                    "total_waited": total_waited, "backoff_idx": backoff_idx,
+                })
+                time.sleep(delay)
+                total_waited += delay
+                backoff_idx += 1
+
+                # Health check before retrying the real task
+                if not self._network_health_check(model):
+                    # Health check failed — keep waiting
+                    while total_waited < max_wait:
+                        delay = delays[min(backoff_idx, len(delays) - 1)]
+                        _log("NETWORK", f"⏸ Health check failed, waiting {delay}s...")
+                        time.sleep(delay)
+                        total_waited += delay
+                        backoff_idx += 1
+                        if self._network_health_check(model):
+                            break
+                    else:
+                        raise NetworkTimeoutError(
+                            f"Network unavailable for {total_waited}s (max {max_wait}s). "
+                            f"Health checks never passed."
+                        )
+
+                _log("NETWORK", "▶ Network recovered, resuming task")
+                continue
+
+            # Success or non-network error — reset backoff and return
+            if result.exit_code != 0 or not result.text.strip():
+                _log("OPENCODE", f"warning: exit={result.exit_code} text_len={len(result.text)} "
+                     f"events={len(result.raw_events)} text={result.text[:200]!r}")
+            return result
+
+    def _network_health_check(self, model: str | None = None) -> bool:
+        """Run a trivial opencode prompt to verify API connectivity."""
+        _log("NETWORK", "running health check...")
+        try:
+            result = opencode.run(
+                "say ok",
+                self.workdir,
+                model=model,
+                timeout=30,
+                on_event=None,  # silent
+            )
+            ok = result.exit_code == 0 and result.text.strip() != ""
+            _log("NETWORK", f"health check {'passed' if ok else 'failed'} "
+                 f"(exit={result.exit_code}, text_len={len(result.text)})")
+            return ok
+        except Exception as e:
+            _log("NETWORK", f"health check exception: {e}")
+            return False
 
 
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+_output_log_path: Path | None = None
+
 
 def _log(phase: str, msg: str) -> None:
     from vtinker.colors import (
@@ -1063,6 +1166,13 @@ def _log(phase: str, msg: str) -> None:
 
     print(f"{TIMESTAMP}{ts}{RESET} {PHASE}▸ {phase}{RESET} {mc}{msg}{RESET}", file=sys.stderr)
 
+    if _output_log_path:
+        try:
+            with open(_output_log_path, "a") as f:
+                f.write(f"{ts} ▸ {phase} {msg}\n")
+        except OSError:
+            pass
+
 
 def _git(workdir: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=workdir, check=True)
@@ -1071,6 +1181,7 @@ def _git(workdir: Path, *args: str) -> None:
 def _git_output(workdir: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=workdir, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     return result.stdout
 

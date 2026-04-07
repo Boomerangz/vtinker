@@ -58,6 +58,32 @@ class BudgetExhaustedError(OpenCodeError):
     pass
 
 
+class NetworkTimeoutError(OpenCodeError):
+    """Network/API timeout — process killed (SIGKILL) with no meaningful output.
+
+    Distinguishes "API never responded" (network down, laptop sleep) from
+    "model worked but timed out" (which has events > 0 and possibly text).
+    """
+    pass
+
+
+def is_network_timeout(result: "RunResult") -> bool:
+    """Check if a RunResult indicates a network timeout (vs a real model timeout).
+
+    Network timeout signature:
+    - exit code -9 (SIGKILL from watchdog)
+    - empty or near-empty text output
+    - very few events (< 3) — no meaningful model activity
+    """
+    if result.exit_code != -9:
+        return False
+    if result.text.strip():
+        return False
+    if len(result.raw_events) >= 3:
+        return False
+    return True
+
+
 @dataclass
 class RunResult:
     exit_code: int
@@ -282,9 +308,16 @@ def run(
         _dbg(f"CWD: (inherited)  PROXY: HTTPS_PROXY={os.environ.get('HTTPS_PROXY', '<unset>')} "
              f"HTTP_PROXY={os.environ.get('HTTP_PROXY', '<unset>')}")
 
+        # Strip proxy env vars — they break requests to internal LLM proxies
+        clean_env = {
+            k: v for k, v in os.environ.items()
+            if k.upper() not in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
+        }
+
         # Stream stdout line-by-line for real-time progress
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=clean_env,
         )
 
         events: list[dict] = []
@@ -304,17 +337,23 @@ def run(
         lines_read = 0
         last_event_time = time.monotonic()
         watchdog_stop = threading.Event()
+        idle_timeout = timeout  # kill if no events for this many seconds
 
         def _watchdog():
-            """Print heartbeat every 30s of silence so user knows it's alive."""
+            """Kill process if idle too long; print heartbeat every 60s."""
             while not watchdog_stop.wait(30):
                 silence = time.monotonic() - last_event_time
-                if silence >= 29:
-                    _dbg(f"no events for {int(silence)}s (events so far: {lines_read}, pid: {proc.pid})")
+                if silence >= idle_timeout:
+                    ts = datetime.datetime.now().strftime("%H:%M:%S")
+                    print(f"{ts} ▸ TIMEOUT no events for {int(silence)}s — killing opencode (pid {proc.pid})", file=sys.stderr)
+                    proc.kill()
+                    return
+                if silence >= 60:
+                    ts = datetime.datetime.now().strftime("%H:%M:%S")
+                    print(f"{ts} ▸ WAIT opencode thinking... {int(silence)}s idle, {lines_read} events so far", file=sys.stderr)
 
-        if _DEBUG:
-            wd_thread = threading.Thread(target=_watchdog, daemon=True)
-            wd_thread.start()
+        wd_thread = threading.Thread(target=_watchdog, daemon=True)
+        wd_thread.start()
 
         # Read stdout line by line
         for line in proc.stdout:

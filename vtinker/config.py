@@ -33,6 +33,8 @@ class Config:
     execute_models: list[str] = field(default_factory=list)  # round-robin pool
     review_models: list[str] = field(default_factory=list)   # multi-reviewer pool
     review_mode: str = "all"  # "all" = parallel (FAIL if any FAIL), "sequential" = one-by-one
+    network_retry_delays: list[int] = field(default_factory=lambda: [30, 60, 120, 300])
+    max_network_wait: int = 3600  # max total pause time (seconds) before giving up
 
 
 def _find_config(workdir: Path) -> Path | None:
